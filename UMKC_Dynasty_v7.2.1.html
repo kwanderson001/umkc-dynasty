@@ -1,0 +1,1141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>UMKC Kangaroos Football Dynasty v7.2 — Roo 816 Hybrid</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    :root {
+      --bg: #0b1a33;
+      --bg-alt: #101f3f;
+      --accent: #f7c948;
+      --accent-soft: #ffe9a3;
+      --text: #f5f7fa;
+      --muted: #a9b3c9;
+      --danger: #e55353;
+      --success: #3bb273;
+      --card: #152447;
+      --border: #22345f;
+      --nav-width: 260px;
+      --radius: 8px;
+      --shadow: 0 4px 12px rgba(0,0,0,0.35);
+      --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font);
+      background: radial-gradient(circle at top, #1b2b4f 0, #050b18 55%, #02040a 100%);
+      color: var(--text);
+      display: flex;
+      min-height: 100vh;
+    }
+    .app-shell {
+      display: flex;
+      width: 100%;
+    }
+    .sidebar {
+      width: var(--nav-width);
+      background: linear-gradient(180deg, #0c1b36 0, #050b18 100%);
+      border-right: 1px solid var(--border);
+      padding: 20px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .brand-logo {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: radial-gradient(circle, #f7c948 0, #f0b429 40%, #c69200 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      color: #0b1a33;
+      box-shadow: var(--shadow);
+    }
+    .brand-text {
+      display: flex;
+      flex-direction: column;
+    }
+    .brand-title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .brand-sub {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .season-tag {
+      font-size: 11px;
+      color: var(--accent-soft);
+      background: rgba(247,201,72,0.12);
+      border-radius: 999px;
+      padding: 4px 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .nav-section-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin-top: 10px;
+      margin-bottom: 4px;
+    }
+    .nav-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .nav-item span.icon {
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+    }
+    .nav-item.active {
+      background: linear-gradient(90deg, rgba(247,201,72,0.18), rgba(247,201,72,0.05));
+      color: var(--text);
+    }
+    .nav-item.active span.icon {
+      border-color: var(--accent);
+      background: rgba(247,201,72,0.18);
+      color: var(--accent);
+    }
+    .nav-item:hover {
+      background: rgba(255,255,255,0.03);
+      color: var(--text);
+    }
+    .nav-footer {
+      margin-top: auto;
+      font-size: 10px;
+      color: var(--muted);
+      border-top: 1px solid rgba(255,255,255,0.04);
+      padding-top: 10px;
+    }
+    .nav-footer strong {
+      color: var(--accent-soft);
+      font-weight: 600;
+    }
+
+    .main {
+      flex: 1;
+      padding: 20px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .top-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .top-left {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .top-title {
+      font-size: 18px;
+      font-weight: 700;
+    }
+    .top-sub {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .top-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .tag-pill {
+      font-size: 11px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.08);
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .tag-pill.highlight {
+      border-color: var(--accent);
+      color: var(--accent-soft);
+      background: rgba(247,201,72,0.12);
+    }
+    .top-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .top-right strong {
+      color: var(--text);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 2.2fr 1.4fr;
+      gap: 16px;
+    }
+    .card {
+      background: var(--card);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      padding: 14px 14px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .card-title {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .card-sub {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .metrics-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .metric {
+      flex: 1;
+      min-width: 120px;
+      background: rgba(255,255,255,0.02);
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.04);
+      padding: 8px 9px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .metric-label {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .metric-value {
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .metric-value.good { color: var(--success); }
+    .metric-value.bad { color: var(--danger); }
+    .metric-footnote {
+      font-size: 10px;
+      color: var(--muted);
+    }
+
+    .next-game {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .next-game-main {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .next-game-teams {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .next-game-label {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .next-game-matchup {
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .next-game-meta {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .next-game-winprob {
+      font-size: 11px;
+      color: var(--accent-soft);
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      border: none;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      transition: background 0.15s, transform 0.05s;
+    }
+    .btn-primary {
+      background: linear-gradient(90deg, #f7c948, #f0b429);
+      color: #0b1a33;
+      box-shadow: 0 3px 8px rgba(0,0,0,0.45);
+    }
+    .btn-primary:hover { background: linear-gradient(90deg, #ffe28a, #f7c948); transform: translateY(-1px); }
+    .btn-ghost {
+      background: rgba(255,255,255,0.02);
+      color: var(--accent-soft);
+      border: 1px solid rgba(247,201,72,0.35);
+    }
+    .btn-ghost:hover { background: rgba(247,201,72,0.12); }
+
+    .quick-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .stats-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 4px;
+    }
+    .stat-pill {
+      flex: 1;
+      min-width: 110px;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.04);
+      padding: 7px 9px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      background: rgba(255,255,255,0.01);
+    }
+    .stat-label {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .stat-value {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .news-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .news-item {
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.04);
+      padding: 7px 9px;
+      background: rgba(255,255,255,0.01);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .news-tag {
+      font-size: 10px;
+      color: var(--accent-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .news-title {
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .news-date {
+      font-size: 10px;
+      color: var(--muted);
+    }
+    .news-body {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .section-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .section-tab {
+      font-size: 11px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.06);
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .section-tab.active {
+      border-color: var(--accent);
+      color: var(--accent-soft);
+      background: rgba(247,201,72,0.12);
+    }
+
+    .section-body {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 6px;
+      font-size: 11px;
+    }
+    .table thead {
+      background: rgba(255,255,255,0.03);
+    }
+    .table th, .table td {
+      padding: 6px 6px;
+      border-bottom: 1px solid rgba(255,255,255,0.04);
+      text-align: left;
+    }
+    .table th {
+      font-weight: 600;
+      color: var(--muted);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .table tr:nth-child(even) {
+      background: rgba(255,255,255,0.01);
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2px 6px;
+      border-radius: 999px;
+      font-size: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .pill-easy { color: var(--success); border-color: var(--success); }
+    .pill-med { color: var(--accent-soft); border-color: var(--accent); }
+    .pill-hard { color: var(--danger); border-color: var(--danger); }
+    .pill-rival { color: var(--accent-soft); border-color: var(--accent); background: rgba(247,201,72,0.12); }
+
+    .footer-note {
+      margin-top: 6px;
+      font-size: 10px;
+      color: var(--muted);
+    }
+
+    @media (max-width: 960px) {
+      .grid { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo">R</div>
+      <div class="brand-text">
+        <div class="brand-title">UMKC Kangaroos</div>
+        <div class="brand-sub">Football Dynasty v7.2 — Roo 816</div>
+        <div class="season-tag">
+          <span>Season 2024</span>
+          <span>Training Camp → Year One</span>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="nav-section-title">Program</div>
+      <ul class="nav-list">
+        <li class="nav-item active" data-section="dashboard">
+          <span class="icon">🏠</span><span>Dashboard</span>
+        </li>
+        <li class="nav-item" data-section="roster">
+          <span class="icon">👥</span><span>Roster</span>
+        </li>
+        <li class="nav-item" data-section="schedule">
+          <span class="icon">📅</span><span>Schedule</span>
+        </li>
+        <li class="nav-item" data-section="recruiting">
+          <span class="icon">⭐</span><span>Recruiting</span>
+        </li>
+        <li class="nav-item" data-section="portal">
+          <span class="icon">🔁</span><span>Transfer Portal</span>
+        </li>
+        <li class="nav-item" data-section="staff">
+          <span class="icon">🧑‍🏫</span><span>Coaching Staff</span>
+        </li>
+        <li class="nav-item" data-section="camp">
+          <span class="icon">🏋️</span><span>Training Camp</span>
+        </li>
+        <li class="nav-item" data-section="stadium">
+          <span class="icon">🏟️</span><span>Stadium & Facilities</span>
+        </li>
+        <li class="nav-item" data-section="nil">
+          <span class="icon">💼</span><span>NIL — Roo 816</span>
+        </li>
+        <li class="nav-item" data-section="rivalries">
+          <span class="icon">🔥</span><span>Rivalries</span>
+        </li>
+        <li class="nav-item" data-section="traditions">
+          <span class="icon">📜</span><span>Traditions</span>
+        </li>
+        <li class="nav-item" data-section="donors">
+          <span class="icon">💰</span><span>Donor Registry</span>
+        </li>
+        <li class="nav-item" data-section="milestones">
+          <span class="icon">🏆</span><span>Milestones</span>
+        </li>
+        <li class="nav-item" data-section="settings">
+          <span class="icon">⚙️</span><span>Settings</span>
+        </li>
+      </ul>
+    </div>
+
+    <div class="nav-footer">
+      <div><strong>UMKC Kangaroos Football Dynasty v7.2</strong></div>
+      <div>Roo 816 Edition · Built for Kangaroo Nation · Made by Copilot</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="top-bar">
+      <div class="top-left">
+        <div class="top-title">Kyle’s UMKC Dynasty</div>
+        <div class="top-sub">Season 2024 · Training Camp · Week 0 · Phase: Regular</div>
+        <div class="top-tags">
+          <div class="tag-pill highlight">Record: 0–0 (0–0 MVFC)</div>
+          <div class="tag-pill">Prestige: 32 / 100</div>
+          <div class="tag-pill">Scholarships: 32 / 85</div>
+          <div class="tag-pill">Fan Happiness: 45%</div>
+        </div>
+      </div>
+      <div class="top-right">
+        <div><strong>UMKC vs Prairie View A&M</strong></div>
+        <div>Next Game · Non-Conference · Win Prob: <strong>73%</strong></div>
+        <div>Opponent OVR: <strong>58</strong></div>
+      </div>
+    </header>
+
+    <section id="section-dashboard" class="section">
+      <div class="grid">
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">Program Overview</div>
+              <div class="card-sub">Year One · Durwood Stadium · Roo 816 NIL</div>
+            </div>
+          </div>
+          <div class="metrics-row">
+            <div class="metric">
+              <div class="metric-label">Offense Rating</div>
+              <div class="metric-value">66</div>
+              <div class="metric-footnote">Young skill group; upside with development.</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Defense Rating</div>
+              <div class="metric-value">68</div>
+              <div class="metric-footnote">4–2–5 base; Denton’s scheme debut.</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Fan Happiness</div>
+              <div class="metric-value bad">45%</div>
+              <div class="metric-footnote">Year One expectations; buzz building.</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">Prestige</div>
+              <div class="metric-value">32 / 100</div>
+              <div class="metric-footnote">New program; room to grow.</div>
+            </div>
+          </div>
+
+          <div class="next-game">
+            <div class="next-game-main">
+              <div class="next-game-teams">
+                <div class="next-game-label">Next Game — Week 1</div>
+                <div class="next-game-matchup">UMKC vs Prairie View A&M</div>
+                <div class="next-game-meta">Non-Conference · Home · OVR 58</div>
+                <div class="next-game-winprob">Win Probability: 73%</div>
+              </div>
+              <button class="btn btn-primary" onclick="alert('Game simulation placeholder — integrate engine v6.x here.')">
+                Simulate Game
+              </button>
+            </div>
+            <div class="quick-actions">
+              <button class="btn btn-ghost" onclick="setSection('roster')">View Roster</button>
+              <button class="btn btn-ghost" onclick="setSection('recruiting')">Recruiting Board</button>
+              <button class="btn btn-ghost" onclick="setSection('camp')">Training Camp</button>
+            </div>
+            <div class="stats-row">
+              <div class="stat-pill">
+                <div class="stat-label">PPG</div>
+                <div class="stat-value">0.0</div>
+              </div>
+              <div class="stat-pill">
+                <div class="stat-label">PPG Allowed</div>
+                <div class="stat-value">0.0</div>
+              </div>
+              <div class="stat-pill">
+                <div class="stat-label">YPG</div>
+                <div class="stat-value">0</div>
+              </div>
+              <div class="stat-pill">
+                <div class="stat-label">YPG Allowed</div>
+                <div class="stat-value">0</div>
+              </div>
+              <div class="stat-pill">
+                <div class="stat-label">3rd Down %</div>
+                <div class="stat-value">0%</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title">News Feed</div>
+              <div class="card-sub">Program · Stadium · NIL · Staff · Milestones</div>
+            </div>
+          </div>
+          <div class="news-list">
+            <div class="news-item">
+              <div class="news-tag">Milestone · 2026-09-02</div>
+              <div class="news-title">Milestone Unlocked: Full Donor Network</div>
+              <div class="news-date">Maintain 5+ active donors.</div>
+              <div class="news-body">Durwood, Halloway, Marcus Lee Foundation, KC Gridiron Club, Reyes-Montoya, and Heartland Media form the core donor network.</div>
+            </div>
+            <div class="news-item">
+              <div class="news-tag">Stadium · 2024-08-05</div>
+              <div class="news-title">Durwood Stadium Ready for Home Opener</div>
+              <div class="news-date">Named for founding donor James Durwood III.</div>
+              <div class="news-body">10,500-seat Durwood Stadium opens for the inaugural UMKC Kangaroos football season.</div>
+            </div>
+            <div class="news-item">
+              <div class="news-tag">NIL · 2024-08-01</div>
+              <div class="news-title">Roo 816 NIL Program Launches</div>
+              <div class="news-date">$850,000 inaugural pool.</div>
+              <div class="news-body">Director of NIL & Analytics Chris Waller oversees Roo 816, aligning local businesses with Kangaroo athletes.</div>
+            </div>
+            <div class="news-item">
+              <div class="news-tag">Staff · 2024-07-30</div>
+              <div class="news-title">22-Person Staff Assembled</div>
+              <div class="news-date">Director of Football Operations Bethany Graves.</div>
+              <div class="news-body">Full coaching and support staff confirmed as UMKC prepares for Year One.</div>
+            </div>
+            <div class="news-item">
+              <div class="news-tag">Program · 2024-07-29</div>
+              <div class="news-title">UMKC Kangaroos Football: Year One Begins</div>
+              <div class="news-date">Training Camp opens at Durwood Stadium.</div>
+              <div class="news-body">Head Coach Marcus Reed addresses the team as the Kangaroos era officially begins.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="section-roster" class="section" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">2024 Roster & Depth Chart</div>
+            <div class="card-sub">Canonical roster from 2024 Depth Chart.</div>
+          </div>
+        </div>
+        <div class="section-body">
+          <p>Below is a subset of the structured roster. In v7.2, this feeds player cards, depth chart views, and simulation ratings.</p>
+          <table class="table" id="roster-table">
+            <thead>
+              <tr>
+                <th>#</th><th>Name</th><th>Pos</th><th>Class</th><th>Home</th><th>Depth</th><th>Status</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="footer-note">Full roster data is loaded via JavaScript from the v7.2 data model.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="section-schedule" class="section" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">2024 Schedule</div>
+            <div class="card-sub">Program’s first season — benchmark games and rivalries.</div>
+          </div>
+        </div>
+        <div class="section-body">
+          <table class="table" id="schedule-table">
+            <thead>
+              <tr>
+                <th>Week</th><th>Opponent</th><th>H/A</th><th>Date</th><th>Difficulty</th><th>Rival</th><th>Notes</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="footer-note">Difficulty and rivalry flags drive simulation difficulty and narrative beats.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="section-recruiting" class="section" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Recruiting Board — 2027 Class</div>
+            <div class="card-sub">Weekly Points: 200 / 200 · Scholarships: 85</div>
+          </div>
+        </div>
+        <div class="section-body">
+          <table class="table" id="recruiting-table">
+            <thead>
+              <tr>
+                <th>Name</th><th>Pos</th><th>Stars</th><th>OVR</th><th>State</th><th>Interest</th><th>Actions (Pts)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="footer-note">Actions consume weekly points and increase interest; signing logic can be layered on top.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="section-portal" class="section" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Transfer Portal</div>
+            <div class="card-sub">Portal Open · Budget: $120,000 · Signed Transfers: 0</div>
+          </div>
+        </div>
+        <div class="section-body">
+          <table class="table" id="portal-table">
+            <thead>
+              <tr>
+                <th>Name</th><th>Pos</th><th>From</th><th>Class</th><th>OVR</th><th>Years Left</th><th>Interest</th><th>Costs</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="footer-note">Budget and interest drive transfer decisions; signing thresholds can be implemented in JS.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="section-camp" class="section" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Training Camp v2</div>
+            <div class="card-sub">26 Days · 4 Phases · Install → Game Prep.</div>
+          </div>
+        </div>
+        <div class="section-body">
+          <div class="section-tabs" id="camp-phases"></div>
+          <div id="camp-phase-body"></div>
+          <button class="btn btn-primary" style="margin-top:8px;" onclick="advanceCampDay()">Advance Day →</button>
+          <div class="footer-note" id="camp-footer"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="section-donors" class="section" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Donor Registry</div>
+            <div class="card-sub">Total Committed: $840,000 · Diamond Donors: 1 · Active Donors: 6 · Avg Relationship: 78</div>
+          </div>
+        </div>
+        <div class="section-body">
+          <table class="table" id="donor-table">
+            <thead>
+              <tr>
+                <th>Name</th><th>Amount</th><th>Tier</th><th>Purpose</th><th>Relationship</th><th>Last Contact</th><th>Notes</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+          <div class="footer-note">Relationship scores and tiers can drive fundraising events, stadium upgrades, and NIL pool growth.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="section-milestones" class="section" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Milestones</div>
+            <div class="card-sub">Narrative achievements and program progression.</div>
+          </div>
+        </div>
+        <div class="section-body">
+          <ul style="font-size:11px; color:var(--muted); padding-left:16px;">
+            <li>Full Donor Network — Maintain 5+ active donors.</li>
+            <li>Year One Complete — Finish inaugural season.</li>
+            <li>First Ranked Win — Defeat a Top 25 opponent.</li>
+            <li>Conference Contender — Reach MVFC title game.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="section-settings" class="section" style="display:none;">
+      <div class="card">
+        <div class="card-header">
+          <div>
+            <div class="card-title">Settings</div>
+            <div class="card-sub">Simulation sliders, difficulty, and presentation.</div>
+          </div>
+        </div>
+        <div class="section-body">
+          <p style="font-size:11px; color:var(--muted);">Hook your simulation engine, difficulty sliders, and save/load logic into this shell. v7.2 is structured to host those systems cleanly.</p>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<script>
+  // -----------------------------
+  // v7.2 DATA MODELS
+  // -----------------------------
+
+  const rosterData = [
+    {pos:"QB",num:10,name:"Marcus Webb",class:"Jr",home:"Lee's Summit, MO",depth:"STR",status:"READY"},
+    {pos:"QB",num:11,name:"Darius Cole",class:"So",home:"Olathe, KS",depth:"2ND",status:"DEVELOPING"},
+    {pos:"QB",num:14,name:"Tyler Reece",class:"RS-Fr",home:"Blue Springs, MO",depth:"3RD",status:"RS/LIMITED"},
+    {pos:"QB",num:7,name:"Jordan Knox",class:"RS-Fr",home:"Raytown, MO",depth:"RS",status:"RS/LIMITED"},
+    {pos:"RB",num:22,name:"DeShawn Patton",class:"Sr",home:"Kansas City, MO",depth:"STR",status:"READY"},
+    {pos:"RB",num:23,name:"Marcus Hill",class:"Jr",home:"Overland Park, KS",depth:"2ND",status:"READY"},
+    {pos:"RB",num:24,name:"Elijah Turner",class:"So",home:"Kansas City, KS",depth:"3RD",status:"DEVELOPING"},
+    {pos:"RB",num:20,name:"Cam Rivers",class:"RS-Fr",home:"Grandview, MO",depth:"4TH",status:"RS/LIMITED"},
+    {pos:"RB",num:25,name:"Jaylen Washington",class:"So",home:"Independence, MO",depth:"ROT",status:"DEVELOPING"},
+    {pos:"RB",num:27,name:"Tre'Von Morris",class:"RS-Fr",home:"Leavenworth, KS",depth:"RS",status:"RS/LIMITED"},
+    {pos:"RB",num:29,name:"Dontae Freeman",class:"Jr",home:"Kansas City, MO",depth:"FB/ST",status:"DEVELOPING"},
+    {pos:"WR-X",num:1,name:"Malik Thompson",class:"Jr",home:"Kansas City, MO",depth:"STR",status:"READY"},
+    {pos:"WR-Z",num:3,name:"Jordan Pierce",class:"Sr",home:"Overland Park, KS",depth:"STR",status:"READY"},
+    {pos:"WR-SLOT",num:5,name:"Donovan Ellis",class:"So",home:"Lee's Summit, MO",depth:"STR",status:"READY"},
+    {pos:"WR-X",num:6,name:"Jaylen Ross",class:"Jr",home:"Prairie Village, KS",depth:"2ND",status:"DEVELOPING"},
+    {pos:"WR-Z",num:13,name:"Marcus Avery",class:"So",home:"Raytown, MO",depth:"2ND",status:"DEVELOPING"},
+    {pos:"WR-SLOT",num:17,name:"Tyler Simmons",class:"Jr",home:"Lenexa, KS",depth:"2ND",status:"DEVELOPING"},
+    {pos:"WR",num:80,name:"Chris Watkins",class:"So",home:"Blue Springs, MO",depth:"3RD",status:"DEVELOPING"},
+    {pos:"WR",num:84,name:"Darius Fuller",class:"Jr",home:"Kansas City, KS",depth:"3RD",status:"DEVELOPING"},
+    {pos:"WR",num:88,name:"Emmanuel Jones",class:"So",home:"Independence, MO",depth:"ST/4TH",status:"DEVELOPING"},
+    {pos:"WR",num:15,name:"DeAndre Hawkins",class:"RS-Fr",home:"Shawnee, KS",depth:"RS",status:"RS/LIMITED"},
+    {pos:"WR",num:82,name:"Zion Carter",class:"RS-Fr",home:"Grandview, MO",depth:"RS",status:"RS/LIMITED"},
+    {pos:"WR",num:86,name:"Brandon Kyle",class:"RS-Fr",home:"Olathe, KS",depth:"RS",status:"RS/LIMITED"},
+    {pos:"TE",num:81,name:"Anthony Reyes",class:"Sr",home:"Kansas City, MO",depth:"TE1",status:"READY"},
+    {pos:"TE",num:83,name:"Marcus Bell",class:"Jr",home:"Lee's Summit, MO",depth:"TE2/H",status:"DEVELOPING"},
+    {pos:"TE",num:85,name:"Devon Marsh",class:"So",home:"Overland Park, KS",depth:"TE3",status:"DEVELOPING"},
+    {pos:"TE",num:87,name:"James Okafor",class:"RS-Fr",home:"Kansas City, KS",depth:"RS",status:"RS/LIMITED"},
+    {pos:"TE",num:89,name:"Tyler Grant",class:"RS-Fr",home:"Raytown, MO",depth:"RS",status:"RS/LIMITED"},
+    {pos:"LT",num:70,name:"Darnell Jackson",class:"Sr",home:"Kansas City, MO",depth:"STR",status:"READY"},
+    {pos:"LT",num:71,name:"Marcus Peters",class:"Jr",home:"Omaha, NE",depth:"2ND",status:"DEVELOPING"},
+    {pos:"LT",num:76,name:"Brandon Lee",class:"RS-Fr",home:"Leavenworth, KS",depth:"RS",status:"RS/LIMITED"},
+    {pos:"LG",num:62,name:"Jordan White",class:"Jr",home:"Kansas City, MO",depth:"STR",status:"READY"},
+    {pos:"LG",num:63,name:"Tyler Brooks",class:"So",home:"Independence, MO",depth:"2ND",status:"DEVELOPING"},
+    {pos:"LG",num:60,name:"Darius Moore",class:"RS-Fr",home:"Lenexa, KS",depth:"RS",status:"RS/LIMITED"},
+    {pos:"C",num:55,name:"DeShawn Howard",class:"Sr",home:"Lee's Summit, MO",depth:"STR",status:"READY"},
+    {pos:"C",num:56,name:"Marcus Green",class:"Jr",home:"Overland Park, KS",depth:"2ND",status:"DEVELOPING"},
+    {pos:"C",num:61,name:"Tyler Johnson",class:"RS-Fr",home:"Blue Springs, MO",depth:"RS",status:"RS/LIMITED"},
+    {pos:"RG",num:64,name:"Elijah Brown",class:"Jr",home:"Kansas City, KS",depth:"STR",status:"READY"},
+    {pos:"RG",num:65,name:"Cam Williams",class:"So",home:"Raytown, MO",depth:"2ND",status:"DEVELOPING"},
+    {pos:"RG",num:66,name:"Marcus Taylor",class:"RS-Fr",home:"Shawnee, KS",depth:"RS",status:"RS/LIMITED"},
+    {pos:"RT",num:72,name:"Anthony Davis",class:"Sr",home:"Chicago, IL",depth:"STR",status:"READY"},
+    {pos:"RT",num:73,name:"DeShawn Cole",class:"So",home:"Grandview, MO",depth:"2ND",status:"DEVELOPING"},
+    {pos:"RT",num:74,name:"Jordan Hall",class:"Jr",home:"Kansas City, MO",depth:"SWING",status:"DEVELOPING"},
+    {pos:"OT",num:75,name:"Chris Evans",class:"So",home:"Olathe, KS",depth:"DEV",status:"DEVELOPING"}
+  ];
+
+  const scheduleData = [
+    {week:1,opponent:"Kansas Christian College",homeAway:"Home",date:"2024-08-31",difficulty:"EASY",rival:false,notes:"Season opener — program’s first-ever game; historic night in KC"},
+    {week:2,opponent:"Missouri State",homeAway:"Away",date:"2024-09-07",difficulty:"HARD",rival:true,notes:"MVC Rival — shows program can compete with conference powers"},
+    {week:3,opponent:"Northern Iowa",homeAway:"Away",date:"2024-09-14",difficulty:"HARD",rival:true,notes:"Benchmark — Denton’s 4–2–5 debuts on national stage"},
+    {week:4,opponent:"Drake",homeAway:"Home",date:"2024-09-21",difficulty:"MED",rival:true,notes:"MVC Rival — OT thriller potential; Brooks’ coming-out game"},
+    {week:5,opponent:"Butler",homeAway:"Home",date:"2024-09-28",difficulty:"MED",rival:false,notes:"Pioneer Rival — 4–2–5 shines; city starts buzzing"},
+    {week:6,opponent:"South Dakota",homeAway:"Away",date:"2024-10-05",difficulty:"HARD",rival:true,notes:"MVFC Rival — measuring stick road test"},
+    {week:7,opponent:"South Dakota State",homeAway:"Away",date:"2024-10-12",difficulty:"HARD",rival:true,notes:"MVFC Rival — national exposure game; Anderson takes notes"},
+    {week:8,opponent:"Eastern Illinois",homeAway:"Home",date:"2024-10-19",difficulty:"MED",rival:true,notes:"MVFC Rival — first comeback win; program resilience"},
+    {week:9,opponent:"Western Illinois",homeAway:"Away",date:"2024-10-26",difficulty:"MED",rival:false,notes:"MVFC Rival — road discipline test; 1-possession game"},
+    {week:10,opponent:"Youngstown State",homeAway:"Home",date:"2024-11-02",difficulty:"MED",rival:true,notes:"MVFC Rival — turnover battle; defining performance game"},
+    {week:11,opponent:"Lindenwood",homeAway:"Home",date:"2024-11-09",difficulty:"MED",rival:true,notes:"MVFC Rival — season finale; identity confirmed"}
+  ];
+
+  const recruitingData = {
+    weeklyPoints:200,
+    weeklyPointsMax:200,
+    scholarships:85,
+    recruits:[
+      {name:"Jaylen Brown",pos:"QB",stars:5,ovr:57,state:"IA",interest:24,actions:{extendOffer:20,phoneCall:5,campInvite:15,officialVisit:35,inHomeVisit:50,pitchSession:10}},
+      {name:"DeShawn Wilson",pos:"RB",stars:5,ovr:56,state:"IL",interest:33,actions:{extendOffer:20,phoneCall:5,campInvite:15,officialVisit:35,inHomeVisit:50,pitchSession:10}},
+      {name:"Bryce Lewis",pos:"WR",stars:5,ovr:64,state:"KS",interest:17,actions:{extendOffer:20,phoneCall:5,campInvite:15,officialVisit:35,inHomeVisit:50,pitchSession:10}},
+      {name:"Cam Wilson",pos:"WR",stars:5,ovr:64,state:"OK",interest:21,actions:{extendOffer:20,phoneCall:5,campInvite:15,officialVisit:35,inHomeVisit:50,pitchSession:10}},
+      {name:"Trey Clark",pos:"OL",stars:5,ovr:57,state:"NE",interest:49,actions:{extendOffer:20,phoneCall:5,campInvite:15,officialVisit:35,inHomeVisit:50,pitchSession:10}},
+      {name:"Darian Washington",pos:"OL",stars:5,ovr:56,state:"KS",interest:22,actions:{extendOffer:20,phoneCall:5,campInvite:15,officialVisit:35,inHomeVisit:50,pitchSession:10}},
+      {name:"Zion Johnson",pos:"DL",stars:5,ovr:56,state:"IA",interest:20,actions:{extendOffer:20,phoneCall:5,campInvite:15,officialVisit:35,inHomeVisit:50,pitchSession:10}},
+      {name:"Kobe Washington",pos:"LB",stars:5,ovr:55,state:"OH",interest:28,actions:{extendOffer:20,phoneCall:5,campInvite:15,officialVisit:35,inHomeVisit:50,pitchSession:10}},
+      {name:"Marquis Williams",pos:"DB",stars:5,ovr:67,state:"KS",interest:50,actions:{extendOffer:20,phoneCall:5,campInvite:15,officialVisit:35,inHomeVisit:50,pitchSession:10}}
+    ]
+  };
+
+  const portalData = {
+    budget:120000,
+    portalOpen:true,
+    players:[
+      {name:"Darnell Moore",pos:"QB",from:"North Dakota State",class:"Jr",ovr:79,yearsLeft:2,interest:43,reachOutCost:5000,offerCost:15000},
+      {name:"Marcus Jackson",pos:"RB",from:"North Dakota State",class:"Sr",ovr:76,yearsLeft:2,interest:62,reachOutCost:5000,offerCost:15000},
+      {name:"Chris Smith",pos:"WR",from:"Western Illinois",class:"Jr",ovr:73,yearsLeft:2,interest:42,reachOutCost:5000,offerCost:15000},
+      {name:"Javon Thomas",pos:"OL",from:"Missouri State",class:"Sr",ovr:75,yearsLeft:2,interest:62,reachOutCost:5000,offerCost:15000},
+      {name:"Tyler Garcia",pos:"DL",from:"Illinois State",class:"Jr",ovr:79,yearsLeft:2,interest:67,reachOutCost:5000,offerCost:15000},
+      {name:"Braden Anderson",pos:"LB",from:"North Dakota State",class:"Sr",ovr:80,yearsLeft:1,interest:46,reachOutCost:5000,offerCost:15000},
+      {name:"Isaiah White",pos:"DB",from:"Indiana State",class:"Jr",ovr:76,yearsLeft:2,interest:53,reachOutCost:5000,offerCost:15000},
+      {name:"DeAndre King",pos:"WR",from:"Indiana State",class:"Sr",ovr:74,yearsLeft:1,interest:67,reachOutCost:5000,offerCost:15000}
+    ],
+    signedTransfers:[]
+  };
+
+  const donorData = {
+    totals:{committed:840000,diamondDonors:1,avgRelationship:78,activeDonors:6},
+    donors:[
+      {name:"James Durwood III",amount:500000,tier:"Diamond",purpose:"Stadium",relationship:95,lastContact:"2024-08-01",notes:"Namesake of Durwood Stadium. Deeply invested in program success."},
+      {name:"Susan & Bob Halloway",amount:150000,tier:"Platinum",purpose:"Scholarships",relationship:88,lastContact:"2024-07-15",notes:"Endowed 6 full scholarships. Attend all home games."},
+      {name:"Marcus Lee Foundation",amount:75000,tier:"Gold",purpose:"NIL Pool",relationship:72,lastContact:"2024-07-28",notes:"Nonprofit focused on student-athlete financial literacy."},
+      {name:"KC Gridiron Club",amount:60000,tier:"Gold",purpose:"Facilities",relationship:80,lastContact:"2024-08-10",notes:"Business coalition supporting KC football development."},
+      {name:"Anita Reyes-Montoya",amount:30000,tier:"Silver",purpose:"Academic Support",relationship:65,lastContact:"2024-06-20",notes:"First-gen student advocate. Funds academic advisor salary."},
+      {name:"Heartland Media Group",amount:25000,tier:"Silver",purpose:"Broadcast",relationship:68,lastContact:"2024-07-01",notes:"Local radio and digital broadcast partner."}
+    ]
+  };
+
+  const campData = {
+    totalDays:26,
+    currentDay:1,
+    phases:[
+      {id:1,name:"INSTALL",range:"Days 1–7",status:"ACTIVE",description:"Conditioning + helmets only. Install base concepts.",unlocked:true},
+      {id:2,name:"PADS",range:"Days 8–14",status:"LOCKED",description:"Full pads. Contact periods begin.",unlocked:false},
+      {id:3,name:"SCRIMMAGES",range:"Days 15–21",status:"LOCKED",description:"Live scrimmages. Depth chart battles.",unlocked:false},
+      {id:4,name:"GAME PREP",range:"Days 22–26",status:"LOCKED",description:"Install gameplan for Week 1.",unlocked:false}
+    ]
+  };
+
+  // -----------------------------
+  // RENDER HELPERS
+  // -----------------------------
+
+  function setSection(section) {
+    document.querySelectorAll('.section').forEach(sec => sec.style.display = 'none');
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.classList.toggle('active', item.dataset.section === section);
+    });
+    const target = document.getElementById('section-' + section);
+    if (target) target.style.display = 'block';
+  }
+
+  function renderRoster() {
+    const tbody = document.querySelector('#roster-table tbody');
+    tbody.innerHTML = '';
+    rosterData.forEach(p => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${p.num}</td>
+        <td>${p.name}</td>
+        <td>${p.pos}</td>
+        <td>${p.class}</td>
+        <td>${p.home}</td>
+        <td>${p.depth}</td>
+        <td>${p.status}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function difficultyPill(diff) {
+    const d = diff.toUpperCase();
+    if (d === 'EASY') return '<span class="pill pill-easy">Easy</span>';
+    if (d === 'HARD') return '<span class="pill pill-hard">Hard</span>';
+    return '<span class="pill pill-med">Med</span>';
+  }
+
+  function renderSchedule() {
+    const tbody = document.querySelector('#schedule-table tbody');
+    tbody.innerHTML = '';
+    scheduleData.forEach(g => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>WK ${g.week}</td>
+        <td>${g.opponent}</td>
+        <td>${g.homeAway}</td>
+        <td>${g.date}</td>
+        <td>${difficultyPill(g.difficulty)}</td>
+        <td>${g.rival ? '<span class="pill pill-rival">Rival</span>' : ''}</td>
+        <td>${g.notes}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function renderRecruiting() {
+    const tbody = document.querySelector('#recruiting-table tbody');
+    tbody.innerHTML = '';
+    recruitingData.recruits.forEach(r => {
+      const actions = r.actions;
+      const actionsText = [
+        `Offer ${actions.extendOffer}`,
+        `Call ${actions.phoneCall}`,
+        `Camp ${actions.campInvite}`,
+        `Visit ${actions.officialVisit}`,
+        `In-Home ${actions.inHomeVisit}`,
+        `Pitch ${actions.pitchSession}`
+      ].join(' · ');
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${r.name}</td>
+        <td>${r.pos}</td>
+        <td>${'★'.repeat(r.stars)}</td>
+        <td>${r.ovr}</td>
+        <td>${r.state}</td>
+        <td>${r.interest}%</td>
+        <td>${actionsText}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function renderPortal() {
+    const tbody = document.querySelector('#portal-table tbody');
+    tbody.innerHTML = '';
+    portalData.players.forEach(p => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${p.name}</td>
+        <td>${p.pos}</td>
+        <td>${p.from}</td>
+        <td>${p.class}</td>
+        <td>${p.ovr}</td>
+        <td>${p.yearsLeft}</td>
+        <td>${p.interest}%</td>
+        <td>Reach: $${p.reachOutCost.toLocaleString()} · Offer: $${p.offerCost.toLocaleString()}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function renderDonors() {
+    const tbody = document.querySelector('#donor-table tbody');
+    tbody.innerHTML = '';
+    donorData.donors.forEach(d => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${d.name}</td>
+        <td>$${d.amount.toLocaleString()}</td>
+        <td>${d.tier}</td>
+        <td>${d.purpose}</td>
+        <td>${d.relationship}</td>
+        <td>${d.lastContact}</td>
+        <td>${d.notes}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+  }
+
+  function renderCamp() {
+    const tabs = document.getElementById('camp-phases');
+    const body = document.getElementById('camp-phase-body');
+    const footer = document.getElementById('camp-footer');
+    tabs.innerHTML = '';
+    campData.phases.forEach(ph => {
+      const tab = document.createElement('div');
+      tab.className = 'section-tab' + (ph.status === 'ACTIVE' ? ' active' : '');
+      tab.textContent = `${ph.name} · ${ph.range}`;
+      tab.onclick = () => {
+        campData.phases.forEach(p => p.status = (p.id === ph.id ? 'ACTIVE' : p.status));
+        renderCamp();
+      };
+      tabs.appendChild(tab);
+    });
+    const active = campData.phases.find(p => p.status === 'ACTIVE');
+    body.innerHTML = `
+      <p style="font-size:11px; color:var(--muted);">
+        <strong>Phase ${active.id}: ${active.name}</strong><br/>
+        ${active.description}<br/>
+        Day ${campData.currentDay} / ${campData.totalDays}
+      </p>
+    `;
+    footer.textContent = `Progression: conditioning, install, contact, scrimmages, and game prep feed player development and depth chart battles. Current Day: ${campData.currentDay}.`;
+  }
+
+  function advanceCampDay() {
+    if (campData.currentDay < campData.totalDays) {
+      campData.currentDay++;
+      if (campData.currentDay === 8) campData.phases[1].unlocked = true;
+      if (campData.currentDay === 15) campData.phases[2].unlocked = true;
+      if (campData.currentDay === 22) campData.phases[3].unlocked = true;
+      campData.phases.forEach(ph => {
+        if (ph.id === 2 && campData.currentDay >= 8) ph.status = 'ACTIVE';
+        if (ph.id === 3 && campData.currentDay >= 15) ph.status = 'ACTIVE';
+        if (ph.id === 4 && campData.currentDay >= 22) ph.status = 'ACTIVE';
+      });
+      renderCamp();
+    } else {
+      alert('Training Camp complete — ready for Week 1.');
+    }
+  }
+
+  // -----------------------------
+  // INITIALIZE
+  // -----------------------------
+
+  function initV72() {
+    renderRoster();
+    renderSchedule();
+    renderRecruiting();
+    renderPortal();
+    renderDonors();
+    renderCamp();
+  }
+
+  document.addEventListener('DOMContentLoaded', initV72);
+</script>
+</body>
+</html>
