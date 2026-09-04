@@ -1,0 +1,6940 @@
+src/
+  app/
+  engine/
+  ui/
+    views/
+    components/
+  data/
+  util/
+public/
+  css/
+  img/
+index.html
+
+// src/engine/game/stateInit.js
+
+// ---- Core JSON state shape ----
+
+export const createEmptyState = () => ({
+  meta: {
+    canonVersion: 'v2.68',
+    currentYear: 2025,
+    currentWeek: 1,
+    currentPhase: 'Camp', // Camp | GameWeek | Bye | Offseason | Portal | Recruiting
+    saveId: null,
+  },
+
+  program: {
+    name: 'UMKC Kangaroos Football',
+    slogan: 'Kansas City\'s Team',
+    philosophy: 'Development First. Championship Mindset.',
+    records: {
+      overall: { wins: 0, losses: 0 },
+      conference: { wins: 0, losses: 0 },
+      playoffAppearances: 0,
+      milestones: [],
+    },
+    brand: {
+      atmosphereTags: [],
+      traditions: [],
+      attendanceAvg: 0,
+    },
+  },
+
+  roster: {
+    players: [],          // populated from Players_Master
+    staff: [],            // populated from Staff_Master
+    depthChart: {},       // position -> array of playerIds
+    redshirtTracker: {},  // playerId -> { year, gamesPlayed }
+    injuryLog: [],        // { playerId, type, severity, week }
+    fatigueLog: [],       // { playerId, level, week }
+    participationLog: [], // { playerId, week, snaps }
+  },
+
+  recruiting: {
+    board: [],            // prospects with interest, grade, pipeline
+    pipelines: [],        // regions / schools
+    visitLog: [],         // { prospectId, date, result }
+    territoryMap: [],     // KC Metro, Missouri, Kansas, etc.
+    probabilityModel: {}, // knobs for realism
+  },
+
+  games: {
+    schedule: [],         // { week, opponentId, homeAway, result }
+    currentGame: null,    // gameId or object
+    scoutingReport: null, // opponent tendencies
+    gamePlan: null,       // run/pass mix, aggressiveness, etc.
+    boxScore: null,       // final stats
+    driveChart: [],       // drive-by-drive summary
+    mediaPack: [],        // pressers, articles, narratives
+  },
+
+  ratings: {
+    playerRatings: {},    // playerId -> ratings object
+    unitRatings: {},      // offense/defense/ST
+    progressionQueue: [], // pending development events
+    developmentWave: [],  // batch progression after games/season
+  },
+
+  canon: {
+    canonLog: [],         // timeline of major decisions/events
+    programRecords: [],   // single-game, season, career records
+    awards: [],           // player/staff awards
+    milestones: [],       // first win, first playoff, etc.
+    traditions: [],       // locked identity elements
+  },
+
+  operations: {
+    scholarshipLedger: {}, // playerId -> count/status
+    eligibility: {},       // playerId -> year/eligibility
+    nil: [],               // NIL deals, constraints
+    donorLog: [],          // major gifts, storylines
+    facilities: {},        // stadium, practice, upgrades
+    attendance: [],        // per-game attendance
+  },
+});
+
+// ---- Helper class for logic ----
+
+export class SimulationState {
+  constructor(initialState = createEmptyState()) {
+    this.state = initialState;
+  }
+
+  // Example: merge partial state (for engines, portal, recruiting, etc.)
+  merge(partial) {
+    this.state = {
+      ...this.state,
+      ...partial,
+      // deeper merges can be handled per section if needed
+    };
+  }
+
+  // Example: update week/phase
+  advanceWeek() {
+    this.state.meta.currentWeek += 1;
+  }
+
+  setPhase(phase) {
+    this.state.meta.currentPhase = phase;
+  }
+
+  // Example: log canon event
+  logCanonEvent(event) {
+    this.state.canon.canonLog.push({
+      ...event,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  getSnapshot() {
+    return JSON.parse(JSON.stringify(this.state));
+  }
+}
+
+// src/engine/game/stateMerge.js
+
+import { createEmptyState } from "./stateInit.js";
+
+/**
+ * Deep merge helper for objects.
+ * Arrays are replaced only if valid; objects are merged recursively.
+ */
+function safeMerge(base, saved) {
+  const output = { ...base };
+
+  for (const key in saved) {
+    const savedVal = saved[key];
+    const baseVal = base[key];
+
+    // If missing in base, skip (forward compatibility protection)
+    if (baseVal === undefined) continue;
+
+    // Arrays: only accept valid arrays
+    if (Array.isArray(baseVal)) {
+      output[key] = Array.isArray(savedVal) ? savedVal : baseVal;
+      continue;
+    }
+
+    // Objects: merge recursively
+    if (typeof baseVal === "object" && baseVal !== null) {
+      output[key] =
+        typeof savedVal === "object" && savedVal !== null
+          ? safeMerge(baseVal, savedVal)
+          : baseVal;
+      continue;
+    }
+
+    // Primitives: nullish coalescing
+    output[key] = savedVal ?? baseVal;
+  }
+
+  return output;
+}
+
+/**
+ * Safely merge a saved state with a fresh v8.0 state.
+ * Prevents corruption, missing fields, and version mismatch issues.
+ */
+export function mergeState(saved) {
+  const base = createEmptyState();
+
+  // If no saved state exists, return fresh canon state
+  if (!saved || typeof saved !== "object") {
+    return base;
+  }
+
+  const merged = {
+    ...base,
+
+    meta: safeMerge(base.meta, saved.meta || {}),
+
+    program: safeMerge(base.program, saved.program || {}),
+
+    roster: safeMerge(base.roster, saved.roster || {}),
+
+    recruiting: safeMerge(base.recruiting, saved.recruiting || {}),
+
+    games: safeMerge(base.games, saved.games || {}),
+
+    ratings: safeMerge(base.ratings, saved.ratings || {}),
+
+    canon: safeMerge(base.canon, saved.canon || {}),
+
+    operations: safeMerge(base.operations, saved.operations || {}),
+  };
+
+  // Version upgrade hook (future-proofing)
+  if (merged.meta.canonVersion !== base.meta.canonVersion) {
+    merged.meta.canonVersion = base.meta.canonVersion;
+    merged.canon.canonLog.push({
+      type: "VERSION_UPGRADE",
+      from: saved.meta?.canonVersion,
+      to: base.meta.canonVersion,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  return merged;
+}
+
+src/engine/game/simulationLoop.js
+// src/engine/simulation/simulationLoop.js
+
+/**
+ * Simulation Loop v8.0
+ * --------------------
+ * Orchestrates:
+ * - weekly pregame prep (ratings + gameplan + depth chart)
+ * - game simulation (drive-based gameEngine v3.0)
+ * - postgame updates (fatigue, injuries, canon logging)
+ */
+
+import { buildRatings } from "../game/ratingsEngine.js";
+import { buildGamePlan } from "../game/gamePlanEngine.js";
+import { buildDepthChart } from "../game/depthChartEngine.js";
+import { simulateGame } from "../game/gameEngine.js";
+import { runFatigueEngineForGameWeek } from "../game/fatigueEngine.js";
+import { runInjuryEngineForGameWeek } from "../game/injuryEngine.js";
+
+/**
+ * Get current opponent from state
+ * (placeholder: assumes schedule array with currentWeek index)
+ */
+function getCurrentOpponent(state) {
+  const week = state.state.meta.currentWeek || 1;
+  const schedule = state.state.schedule || [];
+  return schedule.find(g => g.week === week)?.opponent || {
+    id: "OPP_UNKNOWN",
+    name: "Unknown Opponent"
+  };
+}
+
+/**
+ * Main weekly simulation entry point
+ */
+export function runWeeklySimulation(state) {
+  const week = state.state.meta.currentWeek || 1;
+  const opponent = getCurrentOpponent(state);
+
+  state.logCanonEvent({
+    type: "WEEK_SIM_START_V8",
+    detail: `Starting Week ${week} vs ${opponent.name}.`
+  });
+
+  // 1) Pregame: ratings
+  buildRatings(state);
+
+  // 2) Pregame: depth chart
+  buildDepthChart(state);
+
+  // 3) Pregame: gameplan (can later pass opponentRatings if you store them)
+  buildGamePlan(state, null);
+
+  // 4) Game: drive-based simulation
+  const gameStats = simulateGame(state, opponent);
+
+  // 5) Postgame: fatigue & injuries
+  runFatigueEngineForGameWeek(state, gameStats);
+  runInjuryEngineForGameWeek(state, gameStats);
+
+  state.logCanonEvent({
+    type: "WEEK_SIM_COMPLETE_V8",
+    detail: `Week ${week} complete vs ${opponent.name}: ${gameStats.result} ${gameStats.ourScore}-${gameStats.oppScore}.`,
+    gameStats
+  });
+
+  return gameStats;
+}
+
+
+src/engine/game/gameEngine.js
+// src/engine/game/gameEngine.js
+
+/**
+ * Game Engine v3.0 (Drive-Based)
+ * ------------------------------
+ * Handles:
+ * - pregame context (depth chart, gameplan, ratings)
+ * - 4-quarter drive-based simulation
+ * - scoring, turnovers, field position, clock
+ * - drive chart + play-by-play
+ * - snaps-by-player for fatigue/injury engines
+ * - box score + summary for canon
+ */
+
+import { buildDepthChart } from "./depthChartEngine.js";
+import { simulateDrive, buildDriveSummary } from "./driveEngine.js";
+
+/**
+ * Build initial game state
+ */
+function createGameState(state, opponent) {
+  return {
+    opponent,
+    quarter: 1,
+    clock: 900, // 15:00 per quarter
+    ourScore: 0,
+    oppScore: 0,
+    drives: [],
+    possession: "US", // "US" or "OPP"
+    ballYardLine: 25, // starting at own 25
+  };
+}
+
+/**
+ * Apply drive result to game score and field position
+ */
+function applyDriveResult(game, drive) {
+  const res = drive.result.type;
+
+  if (res === "TOUCHDOWN") {
+    if (game.possession === "US") game.ourScore += 7;
+    else game.oppScore += 7;
+    game.ballYardLine = 25;
+    game.possession = game.possession === "US" ? "OPP" : "US";
+  } else if (res === "FIELD_GOAL") {
+    if (game.possession === "US") game.ourScore += 3;
+    else game.oppScore += 3;
+    game.ballYardLine = 25;
+    game.possession = game.possession === "US" ? "OPP" : "US";
+  } else if (res === "PUNT") {
+    // Simple punt model: flip field, ball at 25
+    game.ballYardLine = 25;
+    game.possession = game.possession === "US" ? "OPP" : "US";
+  } else if (res === "TURNOVER") {
+    // Change possession at current yard line, flip field
+    game.possession = game.possession === "US" ? "OPP" : "US";
+    game.ballYardLine = 100 - drive.result.yardLine;
+  } else if (res === "END_OF_QUARTER") {
+    // Keep possession and field position
+  }
+}
+
+/**
+ * Advance quarter if clock hits 0
+ */
+function advanceQuarterIfNeeded(game) {
+  if (game.clock <= 0) {
+    game.quarter += 1;
+    game.clock = 900;
+  }
+}
+
+/**
+ * Simulate one drive for current possession
+ */
+function simulateSingleDrive(state, game) {
+  const startYardLine =
+    game.possession === "US" ? game.ballYardLine : 100 - game.ballYardLine;
+
+  const drive = simulateDrive(state, startYardLine, game.quarter, game.clock);
+
+  // Update game clock to end-of-drive clock
+  game.clock = drive.clock;
+
+  // Store drive with possession tag
+  game.drives.push({
+    possession: game.possession,
+    drive,
+    summary: buildDriveSummary(drive),
+  });
+
+  // Apply scoring / field position / possession changes
+  applyDriveResult(game, drive);
+
+  // Quarter advance if needed
+  advanceQuarterIfNeeded(game);
+}
+
+/**
+ * Build snaps-by-player from depth chart (simple model)
+ */
+function buildSnapsByPlayerFromDepthChart(state) {
+  const depthChart = state.state.roster.depthChart || {};
+  const snapsByPlayer = {};
+
+  Object.values(depthChart).forEach(group => {
+    group.forEach(slot => {
+      const baseSnaps = slot.adjustedSnaps ?? slot.baseSnaps ?? 40;
+      snapsByPlayer[slot.playerId] =
+        (snapsByPlayer[slot.playerId] || 0) + baseSnaps;
+    });
+  });
+
+  return snapsByPlayer;
+}
+
+/**
+ * Build box score + gameStats object
+ */
+function buildGameStats(state, game) {
+  const snapsByPlayer = buildSnapsByPlayerFromDepthChart(state);
+
+  return {
+    week: state.state.meta.currentWeek,
+    opponentId: game.opponent.id,
+    opponentName: game.opponent.name,
+    ourScore: game.ourScore,
+    oppScore: game.oppScore,
+    result: game.ourScore > game.oppScore ? "WIN" : "LOSS",
+    drives: game.drives,
+    snapsByPlayer,
+  };
+}
+
+/**
+ * Main game simulation entry point (drive-based)
+ */
+export function simulateGame(state, opponent) {
+  // Pregame: ensure depth chart is current
+  buildDepthChart(state);
+
+  state.logCanonEvent({
+    type: "GAME_SIM_START_V3",
+    detail: `Drive-based sim start vs ${opponent.name}.`
+  });
+
+  const game = createGameState(state, opponent);
+
+  // 4 quarters max
+  while (game.quarter <= 4) {
+    simulateSingleDrive(state, game);
+
+    // Safety: cap total drives
+    if (game.drives.length >= 30) break;
+  }
+
+  const gameStats = buildGameStats(state, game);
+
+  state.logCanonEvent({
+    type: "GAME_SIM_COMPLETE_V3",
+    detail: `Game finished vs ${opponent.name}: ${gameStats.result} ${gameStats.ourScore}-${gameStats.oppScore}.`,
+    gameStats
+  });
+
+  return gameStats;
+}
+
+
+src/engine/game/driveEngine.js
+// src/engine/game/driveEngine.js
+
+/**
+ * Drive Engine v8.0
+ * -----------------
+ * Handles:
+ * - drive-level simulation
+ * - down/distance progression
+ * - field position
+ * - scoring logic
+ * - turnover logic
+ * - clock management
+ * - drive chart output
+ * - integration with playEngine v8.0
+ */
+
+import { simulatePlay } from "./playEngine.js";
+
+/**
+ * Create initial drive state
+ */
+function createDriveState(startYardLine, quarter, clock) {
+  return {
+    yardLine: startYardLine,
+    down: 1,
+    distance: 10,
+    quarter,
+    clock,
+    plays: [],
+    result: null,
+  };
+}
+
+/**
+ * Advance down/distance after a play
+ */
+function advanceDownAndDistance(drive, yardsGained) {
+  drive.yardLine += yardsGained;
+
+  if (yardsGained >= drive.distance) {
+    // First down
+    drive.down = 1;
+    drive.distance = 10;
+  } else {
+    drive.down += 1;
+    drive.distance -= yardsGained;
+  }
+}
+
+/**
+ * Check scoring / turnover / turnover on downs
+ */
+function checkDriveEnd(drive, playOutcome) {
+  // Turnover
+  if (playOutcome.result === "TURNOVER") {
+    drive.result = {
+      type: "TURNOVER",
+      yardLine: drive.yardLine,
+    };
+    return true;
+  }
+
+  // Touchdown
+  if (drive.yardLine >= 100) {
+    drive.result = {
+      type: "TOUCHDOWN",
+      yardLine: drive.yardLine,
+    };
+    return true;
+  }
+
+  // Field goal (simple placeholder: if in range on 4th down)
+  if (drive.down === 4 && drive.yardLine >= 65) {
+    drive.result = {
+      type: "FIELD_GOAL",
+      yardLine: drive.yardLine,
+    };
+    return true;
+  }
+
+  // Punt (4th down, not in FG range)
+  if (drive.down === 4 && drive.yardLine < 65) {
+    drive.result = {
+      type: "PUNT",
+      yardLine: drive.yardLine,
+    };
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Apply clock runoff
+ */
+function applyClockRunoff(drive, playOutcome) {
+  drive.clock -= playOutcome.clockRunoff;
+  if (drive.clock < 0) drive.clock = 0;
+}
+
+/**
+ * Main drive simulation entry point
+ */
+export function simulateDrive(state, startYardLine, quarter, clock) {
+  const drive = createDriveState(startYardLine, quarter, clock);
+
+  while (!drive.result && drive.clock > 0 && drive.plays.length < 20) {
+    const playOutcome = simulatePlay(
+      state,
+      drive.down,
+      drive.distance,
+      drive.yardLine
+    );
+
+    drive.plays.push({
+      down: drive.down,
+      distance: drive.distance,
+      yardLineBefore: drive.yardLine,
+      playType: playOutcome.playType,
+      personnel: playOutcome.personnel,
+      yards: playOutcome.yards,
+      result: playOutcome.result,
+      clockRunoff: playOutcome.clockRunoff,
+    });
+
+    applyClockRunoff(drive, playOutcome);
+
+    // If turnover, TD, FG, punt → end drive
+    if (checkDriveEnd(drive, playOutcome)) break;
+
+    // Otherwise advance down/distance
+    advanceDownAndDistance(drive, playOutcome.yards);
+  }
+
+  // If drive ended only because clock hit 0
+  if (!drive.result) {
+    drive.result = {
+      type: "END_OF_QUARTER",
+      yardLine: drive.yardLine,
+    };
+  }
+
+  return drive;
+}
+
+/**
+ * Build a simple drive chart summary
+ */
+export function buildDriveSummary(drive) {
+  return {
+    result: drive.result.type,
+    startYardLine: drive.plays[0]?.yardLineBefore ?? drive.yardLine,
+    endYardLine: drive.yardLine,
+    playCount: drive.plays.length,
+    quarter: drive.quarter,
+    clockEnd: drive.clock,
+  };
+}
+
+
+src/engine/game/depthChartEngine.js
+// src/engine/game/depthChartEngine.js
+
+/**
+ * Depth Chart Engine v8.0
+ * -----------------------
+ * Handles:
+ * - positional grouping
+ * - starter / backup / rotation / emergency tiers
+ * - injury & fatigue availability
+ * - snap distribution model
+ * - personnel packages (basic)
+ * - integration with gameEngine, fatigueEngine, injuryEngine, gamePlanEngine
+ */
+
+/**
+ * Position groups
+ */
+const OFFENSE_POSITIONS = ["QB", "RB", "WR", "TE", "LT", "LG", "C", "RG", "RT"];
+const DEFENSE_POSITIONS = ["DE", "DT", "LB", "CB", "S"];
+const SPECIAL_POSITIONS = ["K", "P", "LS"];
+
+/**
+ * Base snap distribution by tier
+ */
+const SNAP_TIERS = {
+  STARTER: 60,
+  BACKUP: 35,
+  ROTATION: 15,
+  EMERGENCY: 5
+};
+
+/**
+ * Determine tier based on depth index
+ */
+function tierFromDepthIndex(idx) {
+  if (idx === 0) return "STARTER";
+  if (idx === 1) return "BACKUP";
+  if (idx === 2) return "ROTATION";
+  return "EMERGENCY";
+}
+
+/**
+ * Check injury availability
+ */
+function isInjuryAvailable(player, injuryLog) {
+  const injury = injuryLog.find(i => i.playerId === player.id);
+  if (!injury) return true;
+
+  // QUESTIONABLE: can play, reduced snaps
+  if (injury.severity === "QUESTIONABLE") return true;
+
+  // DOUBTFUL / OUT: unavailable
+  if (injury.severity === "DOUBTFUL" || injury.severity === "OUT") return false;
+
+  return true;
+}
+
+/**
+ * Fatigue impact on snaps
+ */
+function fatigueSnapModifier(player, fatigueLog) {
+  const entry = fatigueLog.find(f => f.playerId === player.id);
+  if (!entry) return 1.0;
+
+  if (entry.level === "LOW") return 1.0;
+  if (entry.level === "MEDIUM") return 0.85;
+  if (entry.level === "HIGH") return 0.7;
+
+  return 1.0;
+}
+
+/**
+ * Build positional depth chart
+ */
+function buildPositionalDepthChart(state) {
+  const players = state.state.roster.players || [];
+  const injuryLog = state.state.roster.injuryLog || [];
+  const fatigueLog = state.state.roster.fatigueLog || [];
+
+  const depthChart = {};
+
+  players.forEach(player => {
+    const pos = player.position;
+    if (!pos) return;
+
+    if (!depthChart[pos]) depthChart[pos] = [];
+
+    const available = isInjuryAvailable(player, injuryLog);
+    const fatigueMod = fatigueSnapModifier(player, fatigueLog);
+
+    depthChart[pos].push({
+      playerId: player.id,
+      name: player.fullName,
+      position: pos,
+      overall: player.overall || 50,
+      available,
+      fatigueMod
+    });
+  });
+
+  // Sort each position group by overall
+  Object.keys(depthChart).forEach(pos => {
+    depthChart[pos].sort((a, b) => (b.overall || 50) - (a.overall || 50));
+  });
+
+  // Assign depthIndex, tier, baseSnaps, adjustedSnaps
+  Object.keys(depthChart).forEach(pos => {
+    depthChart[pos] = depthChart[pos].map((slot, idx) => {
+      const tier = tierFromDepthIndex(idx);
+      const baseSnaps = SNAP_TIERS[tier];
+      const adjustedSnaps = slot.available
+        ? Math.round(baseSnaps * slot.fatigueMod)
+        : 0;
+
+      return {
+        ...slot,
+        depthIndex: idx,
+        tier,
+        baseSnaps,
+        adjustedSnaps
+      };
+    });
+  });
+
+  return depthChart;
+}
+
+/**
+ * Basic personnel packages (offense only for now)
+ */
+function buildPersonnelPackages(depthChart) {
+  const packages = {};
+
+  // 11 personnel: 1 RB, 1 TE, 3 WR
+  packages["11"] = {
+    RB: depthChart["RB"]?.[0]?.playerId || null,
+    TE: depthChart["TE"]?.[0]?.playerId || null,
+    WR: [
+      depthChart["WR"]?.[0]?.playerId || null,
+      depthChart["WR"]?.[1]?.playerId || null,
+      depthChart["WR"]?.[2]?.playerId || null
+    ].filter(Boolean),
+    QB: depthChart["QB"]?.[0]?.playerId || null
+  };
+
+  // 12 personnel: 1 RB, 2 TE, 2 WR
+  packages["12"] = {
+    RB: depthChart["RB"]?.[0]?.playerId || null,
+    TE: [
+      depthChart["TE"]?.[0]?.playerId || null,
+      depthChart["TE"]?.[1]?.playerId || null
+    ].filter(Boolean),
+    WR: [
+      depthChart["WR"]?.[0]?.playerId || null,
+      depthChart["WR"]?.[1]?.playerId || null
+    ].filter(Boolean),
+    QB: depthChart["QB"]?.[0]?.playerId || null
+  };
+
+  // 10 personnel: 1 RB, 0 TE, 4 WR
+  packages["10"] = {
+    RB: depthChart["RB"]?.[0]?.playerId || null,
+    TE: [],
+    WR: [
+      depthChart["WR"]?.[0]?.playerId || null,
+      depthChart["WR"]?.[1]?.playerId || null,
+      depthChart["WR"]?.[2]?.playerId || null,
+      depthChart["WR"]?.[3]?.playerId || null
+    ].filter(Boolean),
+    QB: depthChart["QB"]?.[0]?.playerId || null
+  };
+
+  return packages;
+}
+
+/**
+ * Main depth chart build entry point
+ */
+export function buildDepthChart(state) {
+  const depthChart = buildPositionalDepthChart(state);
+  const packages = buildPersonnelPackages(depthChart);
+
+  state.state.roster.depthChart = depthChart;
+  state.state.roster.personnelPackages = packages;
+
+  state.logCanonEvent({
+    type: "DEPTH_CHART_BUILT",
+    detail: "Depth chart and personnel packages built.",
+    depthChartSummary: Object.keys(depthChart).reduce((acc, pos) => {
+      acc[pos] = depthChart[pos].map(s => ({
+        playerId: s.playerId,
+        name: s.name,
+        tier: s.tier,
+        adjustedSnaps: s.adjustedSnaps
+      }));
+      return acc;
+    }, {})
+  });
+}
+
+
+src/engine/game/ratingsEngine.js
+// src/engine/game/ratingsEngine.js
+
+/**
+ * Ratings Engine v8.0
+ * -------------------
+ * Handles:
+ * - unit ratings (OFF, DEF, ST)
+ * - positional ratings
+ * - fatigue & injury modifiers
+ * - culture modifiers
+ * - training camp progression (DEV_Score)
+ * - matchup deltas for game/drive/play engines
+ */
+
+/**
+ * Get fatigue modifier for a player
+ */
+function getFatigueModifier(playerId, fatigueLog) {
+  const entry = fatigueLog?.find(f => f.playerId === playerId);
+  if (!entry) return 0;
+
+  if (entry.level === "LOW") return 0;
+  if (entry.level === "MEDIUM") return -3;
+  if (entry.level === "HIGH") return -7;
+
+  return 0;
+}
+
+/**
+ * Get injury modifier for a player
+ */
+function getInjuryModifier(playerId, injuryLog) {
+  const injury = injuryLog?.find(i => i.playerId === playerId);
+  if (!injury) return 0;
+
+  if (injury.severity === "QUESTIONABLE") return -5;
+  if (injury.severity === "DOUBTFUL" || injury.severity === "OUT") return -99; // effectively unplayable
+
+  return 0;
+}
+
+/**
+ * Apply culture modifiers to unit ratings
+ */
+function applyCultureModifiers(unitRatings, culture) {
+  const tags = culture?.atmosphereTags || [];
+
+  if (tags.includes("TOUGHNESS")) {
+    unitRatings.OFF.runBlock += 2;
+    unitRatings.DEF.overall += 2;
+  }
+
+  if (tags.includes("ENERGY")) {
+    unitRatings.OFF.explosive += 3;
+  }
+
+  if (tags.includes("DISCIPLINE")) {
+    unitRatings.DEF.discipline += 3;
+  }
+
+  return unitRatings;
+}
+
+/**
+ * Base positional rating from player object
+ */
+function basePositionalRating(player) {
+  return player.overall || 50;
+}
+
+/**
+ * Apply DEV_Score progression (simple placeholder)
+ */
+function applyDevelopmentModifier(player) {
+  const dev = player.DEV_Score || 50;
+  return Math.floor((dev - 50) / 10); // +/- up to ~5
+}
+
+/**
+ * Build positional ratings map
+ */
+function buildPositionalRatings(players, fatigueLog, injuryLog) {
+  const positional = {};
+
+  players.forEach(player => {
+    const base = basePositionalRating(player);
+    const devMod = applyDevelopmentModifier(player);
+    const fatMod = getFatigueModifier(player.id, fatigueLog);
+    const injMod = getInjuryModifier(player.id, injuryLog);
+
+    const effective = Math.max(
+      0,
+      base + devMod + fatMod + (injMod === -99 ? -50 : injMod)
+    );
+
+    if (!positional[player.position]) positional[player.position] = [];
+    positional[player.position].push({
+      playerId: player.id,
+      name: player.fullName,
+      position: player.position,
+      rating: effective
+    });
+  });
+
+  return positional;
+}
+
+/**
+ * Aggregate positional ratings into unit ratings
+ */
+function aggregateUnitRatings(positionalRatings) {
+  const OFF = {
+    overall: 50,
+    runBlock: 50,
+    passBlock: 50,
+    explosive: 50,
+    ballSecurity: 50
+  };
+
+  const DEF = {
+    overall: 50,
+    passRush: 50,
+    contain: 50,
+    takeaway: 50,
+    discipline: 50
+  };
+
+  const ST = {
+    overall: 50
+  };
+
+  const avg = pos => {
+    const list = positionalRatings[pos] || [];
+    if (!list.length) return 50;
+    return Math.round(
+      list.reduce((sum, p) => sum + (p.rating || 50), 0) / list.length
+    );
+  };
+
+  // Offense
+  const qb = avg("QB");
+  const rb = avg("RB");
+  const wr = avg("WR");
+  const te = avg("TE");
+  const ol =
+    (avg("LT") + avg("LG") + avg("C") + avg("RG") + avg("RT")) / 5;
+
+  OFF.overall = Math.round((qb * 0.35 + rb * 0.15 + wr * 0.25 + te * 0.1 + ol * 0.15));
+  OFF.runBlock = Math.round(ol);
+  OFF.passBlock = Math.round(ol);
+  OFF.explosive = Math.round((rb * 0.3 + wr * 0.5 + te * 0.2));
+  OFF.ballSecurity = Math.round((rb * 0.4 + qb * 0.3 + wr * 0.3));
+
+  // Defense
+  const dl = (avg("DE") + avg("DT")) / 2;
+  const lb = avg("LB");
+  const db = (avg("CB") + avg("S")) / 2;
+
+  DEF.overall = Math.round((dl * 0.3 + lb * 0.3 + db * 0.4));
+  DEF.passRush = Math.round(dl);
+  DEF.contain = Math.round((dl * 0.3 + lb * 0.3 + db * 0.4));
+  DEF.takeaway = Math.round((lb * 0.3 + db * 0.7));
+  DEF.discipline = Math.round((lb * 0.4 + db * 0.6));
+
+  // Special teams
+  const k = avg("K");
+  const p = avg("P");
+  ST.overall = Math.round((k + p) / 2);
+
+  return { OFF, DEF, ST };
+}
+
+/**
+ * Build matchup deltas for game/drive/play engines
+ */
+function buildMatchupDeltas(unitRatings) {
+  const { OFF, DEF } = unitRatings;
+
+  return {
+    offVsDefOverall: OFF.overall - DEF.overall,
+    explosiveVsContain: OFF.explosive - DEF.contain,
+    passRushVsPassBlock: DEF.passRush - OFF.passBlock,
+    takeawayVsBallSecurity: DEF.takeaway - OFF.ballSecurity
+  };
+}
+
+/**
+ * Main ratings engine entry point
+ */
+export function buildRatings(state) {
+  const players = state.state.roster.players || [];
+  const fatigueLog = state.state.roster.fatigueLog || [];
+  const injuryLog = state.state.roster.injuryLog || [];
+  const culture = state.state.program.brand || {};
+
+  const positionalRatings = buildPositionalRatings(players, fatigueLog, injuryLog);
+  let unitRatings = aggregateUnitRatings(positionalRatings);
+
+  unitRatings = applyCultureModifiers(unitRatings, culture);
+
+  const matchupDeltas = buildMatchupDeltas(unitRatings);
+
+  state.state.ratings = {
+    positionalRatings,
+    unitRatings,
+    matchupDeltas
+  };
+
+  state.logCanonEvent({
+    type: "RATINGS_BUILT_V8",
+    detail: "Unit and positional ratings built.",
+    unitRatings,
+    matchupDeltas
+  });
+}
+
+
+src/engine/game/trainingCampEngine.js
+// src/engine/game/trainingCampEngine.js
+
+/**
+ * Training Camp Engine v8.0
+ * -------------------------
+ * Handles:
+ * - development waves
+ * - staff influence
+ * - culture modifiers
+ * - archetype-based progression
+ * - camp reports
+ * - depth chart updates
+ */
+
+import { buildDepthChart, applyAvailability } from "./depthChartEngine.js";
+import { calculatePlayerOverall } from "./ratingsEngine.js";
+
+/**
+ * Staff influence weights (placeholder)
+ */
+const STAFF_WEIGHTS = {
+  HC: 0.10,
+  OC: 0.15,
+  DC: 0.15,
+  S_Coach: 0.10,
+  P_Coach: 0.10,
+  Strength: 0.10,
+  Culture: 0.10,
+  Analyst: 0.05
+};
+
+/**
+ * Culture modifiers (placeholder)
+ */
+const CULTURE_MODIFIERS = {
+  "HARD_WORK": 2,
+  "DISCIPLINE": 1,
+  "ENERGY": 1,
+  "DETAILS": 2,
+  "TOUGHNESS": 3
+};
+
+/**
+ * Apply staff influence to player development
+ */
+function applyStaffInfluence(player, staff) {
+  let bonus = 0;
+
+  staff.forEach(coach => {
+    const weight = STAFF_WEIGHTS[coach.role] || 0;
+    const coachSkill = coach.skill || 50;
+    bonus += Math.floor((coachSkill - 50) * weight / 10);
+  });
+
+  return bonus;
+}
+
+/**
+ * Apply culture influence to player development
+ */
+function applyCultureInfluence(player, cultureTags) {
+  let bonus = 0;
+
+  cultureTags.forEach(tag => {
+    bonus += CULTURE_MODIFIERS[tag] || 0;
+  });
+
+  return bonus;
+}
+
+/**
+ * Archetype-based development wave
+ */
+function applyDevelopmentWave(player) {
+  const archetype = player.archetype || "BALANCED";
+
+  switch (archetype) {
+    case "POWER":
+      return Math.floor(Math.random() * 3); // 0–2
+    case "SPEED":
+      return Math.floor(Math.random() * 4); // 0–3
+    case "TECHNIQUE":
+      return Math.floor(Math.random() * 3); // 0–2
+    case "BALANCED":
+    default:
+      return Math.floor(Math.random() * 2); // 0–1
+  }
+}
+
+/**
+ * Run full training camp progression
+ */
+export function runTrainingCamp(state) {
+  const players = state.state.roster.players;
+  const staff = state.state.roster.staff;
+  const cultureTags = state.state.program.brand.atmosphereTags || [];
+
+  const campReport = [];
+
+  players.forEach(player => {
+    const baseOverall = calculatePlayerOverall(player);
+
+    const devWave = applyDevelopmentWave(player);
+    const staffBonus = applyStaffInfluence(player, staff);
+    const cultureBonus = applyCultureInfluence(player, cultureTags);
+
+    const totalGain = devWave + staffBonus + cultureBonus;
+
+    player.overall = Math.min(99, baseOverall + totalGain);
+
+    campReport.push({
+      playerId: player.id,
+      name: player.fullName,
+      position: player.position,
+      gain: totalGain,
+      newOverall: player.overall
+    });
+  });
+
+  // Update depth chart after development
+  buildDepthChart(state);
+  applyAvailability(state);
+
+  state.logCanonEvent({
+    type: "TRAINING_CAMP_COMPLETE",
+    detail: "Training camp progression applied.",
+    report: campReport
+  });
+
+  state.state.trainingCamp = {
+    week: 1,
+    intensity: "HIGH",
+    padsOn: true,
+    developmentReport: campReport
+  };
+}
+
+src/engine/game/portalEngine.js
+// src/engine/game/portalEngine.js
+
+/**
+ * Portal Engine v8.0
+ * ------------------
+ * Handles:
+ * - transfer motivations
+ * - roster openings
+ * - NIL influence
+ * - culture influence
+ * - playing time influence
+ * - staff influence
+ * - portal departures
+ * - portal commitments
+ */
+
+import { buildDepthChart } from "./depthChartEngine.js";
+
+/**
+ * Motivation weights (placeholder)
+ */
+const MOTIVATION_WEIGHTS = {
+  PLAYING_TIME: 0.35,
+  NIL: 0.25,
+  CULTURE: 0.20,
+  STAFF: 0.10,
+  HOMETOWN: 0.10
+};
+
+/**
+ * Calculate transfer probability for a player
+ */
+function calculateTransferProbability(player, state) {
+  const depthChart = state.state.roster.depthChart;
+  const nilDeals = state.state.operations.nil || [];
+  const cultureTags = state.state.program.brand.atmosphereTags || [];
+  const staff = state.state.roster.staff;
+
+  let score = 0;
+
+  // Playing time (depth index)
+  const posGroup = depthChart[player.position] || [];
+  const slot = posGroup.find(s => s.playerId === player.id);
+  const depthIndex = slot?.depthIndex ?? 99;
+
+  if (depthIndex >= 3) score += 30; // buried on depth chart
+  if (depthIndex === 2) score += 15; // backup
+  if (depthIndex === 1) score += 5;  // rotational
+
+  // NIL influence
+  const playerNil = nilDeals.find(d => d.playerId === player.id);
+  if (!playerNil) score += 10; // no NIL deal
+  if (playerNil && playerNil.value < 5000) score += 5;
+
+  // Culture influence
+  if (!cultureTags.includes("ENERGY")) score += 5;
+  if (!cultureTags.includes("TOUGHNESS")) score += 5;
+
+  // Staff influence
+  const coachSkillAvg =
+    staff.reduce((a, b) => a + (b.skill || 50), 0) / staff.length;
+  if (coachSkillAvg < 55) score += 10;
+
+  // Hometown factor
+  if (player.homeState !== "MO" && player.homeState !== "KS") {
+    score += 5;
+  }
+
+  return Math.min(100, score);
+}
+
+/**
+ * Determine if player enters portal
+ */
+function checkPortalEntry(player, state) {
+  const probability = calculateTransferProbability(player, state);
+  return Math.random() * 100 < probability;
+}
+
+/**
+ * Generate portal departures
+ */
+function generatePortalDepartures(state) {
+  const players = state.state.roster.players;
+  const departures = [];
+
+  players.forEach(player => {
+    if (checkPortalEntry(player, state)) {
+      departures.push({
+        playerId: player.id,
+        name: player.fullName,
+        position: player.position,
+        reason: "TRANSFER_PORTAL",
+        probability: calculateTransferProbability(player, state)
+      });
+    }
+  });
+
+  return departures;
+}
+
+/**
+ * Remove departing players from roster
+ */
+function applyDepartures(state, departures) {
+  const ids = new Set(departures.map(d => d.playerId));
+  state.state.roster.players = state.state.roster.players.filter(
+    p => !ids.has(p.id)
+  );
+
+  state.logCanonEvent({
+    type: "PORTAL_DEPARTURES",
+    detail: `${departures.length} players entered the portal.`,
+    departures
+  });
+}
+
+/**
+ * Generate portal commitments (placeholder)
+ */
+function generatePortalCommitments(state) {
+  const needs = determineRosterNeeds(state);
+  const commitments = [];
+
+  needs.forEach(need => {
+    const commit = {
+      name: `Portal Transfer ${need.position}`,
+      position: need.position,
+      overall: 65 + Math.floor(Math.random() * 10),
+      year: "JR",
+      homeState: "TX",
+      recruitType: "PORTAL"
+    };
+    commitments.push(commit);
+  });
+
+  return commitments;
+}
+
+/**
+ * Determine roster needs based on depth chart
+ */
+function determineRosterNeeds(state) {
+  const depthChart = state.state.roster.depthChart;
+  const needs = [];
+
+  Object.keys(depthChart).forEach(pos => {
+    const group = depthChart[pos];
+    if (group.length < 2) {
+      needs.push({ position: pos });
+    }
+  });
+
+  return needs;
+}
+
+/**
+ * Apply portal commitments to roster
+ */
+function applyCommitments(state, commitments) {
+  commitments.forEach(c => {
+    const newPlayer = {
+      id: `portal_${Date.now()}_${Math.random()}`,
+      fullName: c.name,
+      position: c.position,
+      overall: c.overall,
+      year: c.year,
+      homeState: c.homeState,
+      recruitType: c.recruitType,
+      attributes: {},
+      unit: determineUnit(c.position)
+    };
+
+    state.state.roster.players.push(newPlayer);
+  });
+
+  state.logCanonEvent({
+    type: "PORTAL_COMMITMENTS",
+    detail: `${commitments.length} portal players added.`,
+    commitments
+  });
+}
+
+/**
+ * Determine unit (OFF, DEF, ST)
+ */
+function determineUnit(position) {
+  const offense = ["QB", "RB", "WR", "TE", "LT", "LG", "C", "RG", "RT"];
+  const defense = ["DE", "DT", "LB", "CB", "S"];
+  const special = ["K", "P", "LS"];
+
+  if (offense.includes(position)) return "OFF";
+  if (defense.includes(position)) return "DEF";
+  if (special.includes(position)) return "ST";
+  return "OFF";
+}
+
+/**
+ * Main portal engine entry point
+ */
+export function runPortalEngine(state) {
+  // Build depth chart first
+  buildDepthChart(state);
+
+  // Generate departures
+  const departures = generatePortalDepartures(state);
+  applyDepartures(state, departures);
+
+  // Generate commitments
+  const commitments = generatePortalCommitments(state);
+  applyCommitments(state, commitments);
+
+  state.logCanonEvent({
+    type: "PORTAL_CYCLE_COMPLETE",
+    detail: "Portal cycle completed."
+  });
+}
+
+src/engine/game/recruitingEngine.js
+// src/engine/game/recruitingEngine.js
+
+/**
+ * Recruiting Engine v8.0
+ * ----------------------
+ * Handles:
+ * - interest modeling
+ * - pipelines
+ * - territory maps
+ * - staff influence
+ * - NIL influence
+ * - culture influence
+ * - recruiting battles
+ * - visits
+ * - commitments
+ * - class building
+ */
+
+import { buildDepthChart } from "./depthChartEngine.js";
+
+/**
+ * Interest weights (placeholder)
+ */
+const INTEREST_WEIGHTS = {
+  STAFF: 0.25,
+  NIL: 0.20,
+  CULTURE: 0.20,
+  PLAYING_TIME: 0.20,
+  LOCATION: 0.15
+};
+
+/**
+ * Calculate interest score for a prospect
+ */
+function calculateInterest(prospect, state) {
+  const staff = state.state.roster.staff;
+  const nilDeals = state.state.operations.nil || [];
+  const cultureTags = state.state.program.brand.atmosphereTags || [];
+  const depthChart = state.state.roster.depthChart;
+
+  let score = 0;
+
+  // Staff influence
+  const coachSkillAvg =
+    staff.reduce((a, b) => a + (b.skill || 50), 0) / staff.length;
+  score += (coachSkillAvg - 50) * INTEREST_WEIGHTS.STAFF;
+
+  // NIL influence
+  const nilBudget = nilDeals.reduce((a, b) => a + (b.value || 0), 0);
+  score += (nilBudget / 10000) * INTEREST_WEIGHTS.NIL;
+
+  // Culture influence
+  if (cultureTags.includes("ENERGY")) score += 5;
+  if (cultureTags.includes("TOUGHNESS")) score += 5;
+  if (cultureTags.includes("DETAILS")) score += 3;
+
+  // Playing time influence
+  const posGroup = depthChart[prospect.position] || [];
+  if (posGroup.length < 2) score += 10; // immediate playing time
+  if (posGroup.length < 3) score += 5;
+
+  // Location influence
+  if (prospect.homeState === "MO" || prospect.homeState === "KS") {
+    score += 10;
+  } else {
+    score += 3;
+  }
+
+  return Math.max(0, Math.min(100, Math.round(score)));
+}
+
+/**
+ * Update interest for all prospects
+ */
+function updateInterest(state) {
+  const board = state.state.recruiting.board;
+
+  board.forEach(prospect => {
+    prospect.interest = calculateInterest(prospect, state);
+  });
+
+  state.logCanonEvent({
+    type: "RECRUITING_INTEREST_UPDATED",
+    detail: "Prospect interest scores updated."
+  });
+}
+
+/**
+ * Visit probability
+ */
+function visitProbability(prospect) {
+  return prospect.interest > 60 ? 0.6 : prospect.interest > 40 ? 0.3 : 0.1;
+}
+
+/**
+ * Generate visits
+ */
+function generateVisits(state) {
+  const board = state.state.recruiting.board;
+  const visits = [];
+
+  board.forEach(prospect => {
+    if (Math.random() < visitProbability(prospect)) {
+      visits.push({
+        prospectId: prospect.id,
+        name: prospect.name,
+        position: prospect.position,
+        stars: prospect.stars,
+        interest: prospect.interest
+      });
+    }
+  });
+
+  state.logCanonEvent({
+    type: "RECRUITING_VISITS",
+    detail: `${visits.length} prospects visited.`,
+    visits
+  });
+
+  return visits;
+}
+
+/**
+ * Commitment probability
+ */
+function commitmentProbability(prospect) {
+  if (prospect.interest >= 80) return 0.7;
+  if (prospect.interest >= 60) return 0.4;
+  if (prospect.interest >= 40) return 0.2;
+  return 0.05;
+}
+
+/**
+ * Generate commitments
+ */
+function generateCommitments(state) {
+  const board = state.state.recruiting.board;
+  const commitments = [];
+
+  board.forEach(prospect => {
+    if (Math.random() < commitmentProbability(prospect)) {
+      commitments.push({
+        prospectId: prospect.id,
+        name: prospect.name,
+        position: prospect.position,
+        stars: prospect.stars,
+        homeState: prospect.homeState,
+        recruitType: "HS"
+      });
+    }
+  });
+
+  return commitments;
+}
+
+/**
+ * Apply commitments to roster
+ */
+function applyCommitments(state, commitments) {
+  commitments.forEach(c => {
+    const newPlayer = {
+      id: `recruit_${Date.now()}_${Math.random()}`,
+      fullName: c.name,
+      position: c.position,
+      overall: 60 + c.stars * 5 + Math.floor(Math.random() * 5),
+      year: "FR",
+      homeState: c.homeState,
+      recruitType: c.recruitType,
+      attributes: {},
+      unit: determineUnit(c.position)
+    };
+
+    state.state.roster.players.push(newPlayer);
+  });
+
+  state.logCanonEvent({
+    type: "RECRUITING_COMMITMENTS",
+    detail: `${commitments.length} prospects committed.`,
+    commitments
+  });
+}
+
+/**
+ * Determine unit (OFF, DEF, ST)
+ */
+function determineUnit(position) {
+  const offense = ["QB", "RB", "WR", "TE", "LT", "LG", "C", "RG", "RT"];
+  const defense = ["DE", "DT", "LB", "CB", "S"];
+  const special = ["K", "P", "LS"];
+
+  if (offense.includes(position)) return "OFF";
+  if (defense.includes(position)) return "DEF";
+  if (special.includes(position)) return "ST";
+  return "OFF";
+}
+
+/**
+ * Main recruiting engine entry point
+ */
+export function runRecruitingEngine(state) {
+  // Build depth chart first
+  buildDepthChart(state);
+
+  // Update interest
+  updateInterest(state);
+
+  // Generate visits
+  const visits = generateVisits(state);
+
+  // Generate commitments
+  const commitments = generateCommitments(state);
+  applyCommitments(state, commitments);
+
+  state.logCanonEvent({
+    type: "RECRUITING_CYCLE_COMPLETE",
+    detail: "Recruiting cycle completed."
+  });
+}
+
+src/engine/game/nilEngine.js
+// src/engine/game/nilEngine.js
+
+/**
+ * NIL Engine v8.0
+ * ----------------
+ * Handles:
+ * - NIL valuation
+ * - donor influence
+ * - player happiness
+ * - retention modeling
+ * - recruiting impact
+ * - portal impact
+ * - NIL budget management
+ */
+
+import { buildDepthChart } from "./depthChartEngine.js";
+
+/**
+ * Base NIL valuation weights
+ */
+const NIL_WEIGHTS = {
+  POSITION: 0.30,
+  OVERALL: 0.30,
+  MARKET: 0.20,
+  CULTURE: 0.10,
+  DONORS: 0.10
+};
+
+/**
+ * Position market multipliers (placeholder)
+ */
+const POSITION_MARKET = {
+  QB: 1.4,
+  RB: 1.2,
+  WR: 1.3,
+  TE: 1.1,
+  OL: 0.8,
+  DE: 1.2,
+  DT: 1.0,
+  LB: 1.0,
+  CB: 1.3,
+  S: 1.1,
+  K: 0.5,
+  P: 0.5,
+  LS: 0.4
+};
+
+/**
+ * Calculate NIL valuation for a player
+ */
+function calculateNilValue(player, state) {
+  const donors = state.state.operations.donorLog || [];
+  const cultureTags = state.state.program.brand.atmosphereTags || [];
+
+  const donorPower =
+    donors.reduce((a, b) => a + (b.amount || 0), 0) / 10000;
+
+  const cultureBoost = cultureTags.includes("ENERGY") ? 1.1 :
+                       cultureTags.includes("TOUGHNESS") ? 1.05 : 1.0;
+
+  const posMultiplier = POSITION_MARKET[player.position] || 1.0;
+
+  const base =
+    (player.overall * NIL_WEIGHTS.OVERALL) +
+    (posMultiplier * 20 * NIL_WEIGHTS.POSITION) +
+    (donorPower * NIL_WEIGHTS.DONORS * 10);
+
+  return Math.round(base * cultureBoost);
+}
+
+/**
+ * Build NIL valuations for entire roster
+ */
+export function buildNilValuations(state) {
+  const players = state.state.roster.players;
+
+  const valuations = players.map(player => ({
+    playerId: player.id,
+    name: player.fullName,
+    position: player.position,
+    overall: player.overall,
+    nilValue: calculateNilValue(player, state)
+  }));
+
+  state.state.operations.nilValuations = valuations;
+
+  state.logCanonEvent({
+    type: "NIL_VALUATIONS_BUILT",
+    detail: "NIL valuations calculated for roster.",
+    valuations
+  });
+}
+
+/**
+ * Determine NIL offers based on budget
+ */
+function generateNilOffers(state) {
+  const valuations = state.state.operations.nilValuations || [];
+  const nilDeals = state.state.operations.nil || [];
+  const donors = state.state.operations.donorLog || [];
+
+  const budget =
+    donors.reduce((a, b) => a + (b.amount || 0), 0) -
+    nilDeals.reduce((a, b) => a + (b.value || 0), 0);
+
+  const offers = [];
+
+  valuations.forEach(v => {
+    const offerValue = Math.min(v.nilValue, budget / 20);
+    if (offerValue > 0) {
+      offers.push({
+        playerId: v.playerId,
+        name: v.name,
+        position: v.position,
+        offer: Math.round(offerValue)
+      });
+    }
+  });
+
+  return offers;
+}
+
+/**
+ * Apply NIL offers to operations
+ */
+function applyNilOffers(state, offers) {
+  offers.forEach(o => {
+    state.state.operations.nil.push({
+      playerId: o.playerId,
+      value: o.offer,
+      source: "DONOR_POOL"
+    });
+  });
+
+  state.logCanonEvent({
+    type: "NIL_OFFERS_APPLIED",
+    detail: `${offers.length} NIL offers applied.`,
+    offers
+  });
+}
+
+/**
+ * Player happiness model
+ */
+function updatePlayerHappiness(state) {
+  const players = state.state.roster.players;
+  const nilDeals = state.state.operations.nil || [];
+
+  players.forEach(player => {
+    const deal = nilDeals.find(d => d.playerId === player.id);
+    const nilValue = state.state.operations.nilValuations
+      ?.find(v => v.playerId === player.id)?.nilValue || 0;
+
+    const happiness =
+      deal ? Math.min(100, 50 + deal.value / nilValue * 50) : 40;
+
+    player.happiness = Math.round(happiness);
+  });
+
+  state.logCanonEvent({
+    type: "PLAYER_HAPPINESS_UPDATED",
+    detail: "Player happiness updated based on NIL deals."
+  });
+}
+
+/**
+ * Main NIL engine entry point
+ */
+export function runNilEngine(state) {
+  // Build depth chart first
+  buildDepthChart(state);
+
+  // Build NIL valuations
+  buildNilValuations(state);
+
+  // Generate NIL offers
+  const offers = generateNilOffers(state);
+
+  // Apply NIL offers
+  applyNilOffers(state, offers);
+
+  // Update player happiness
+  updatePlayerHappiness(state);
+
+  state.logCanonEvent({
+    type: "NIL_CYCLE_COMPLETE",
+    detail: "NIL cycle completed."
+  });
+}
+
+src/engine/game/cultureEngine.js
+// src/engine/game/cultureEngine.js
+
+/**
+ * Culture Engine v8.0
+ * -------------------
+ * Handles:
+ * - atmosphere tags
+ * - culture progression
+ * - staff influence
+ * - player personality traits
+ * - culture events
+ * - culture → recruiting impact
+ * - culture → portal impact
+ * - culture → NIL impact
+ * - culture → training camp impact
+ */
+
+import { buildDepthChart } from "./depthChartEngine.js";
+
+/**
+ * Base culture tags
+ */
+const CULTURE_TAGS = [
+  "ENERGY",
+  "TOUGHNESS",
+  "DISCIPLINE",
+  "DETAILS",
+  "HARD_WORK",
+  "FAMILY",
+  "ACCOUNTABILITY"
+];
+
+/**
+ * Staff culture influence
+ */
+function staffCultureInfluence(staff) {
+  const cultureCoaches = staff.filter(s => s.role === "Culture" || s.role === "HC");
+  const avgSkill =
+    cultureCoaches.reduce((a, b) => a + (b.skill || 50), 0) /
+    (cultureCoaches.length || 1);
+
+  return Math.round((avgSkill - 50) / 5); // +0 to +10
+}
+
+/**
+ * Player personality influence
+ */
+function playerPersonalityInfluence(players) {
+  let score = 0;
+
+  players.forEach(p => {
+    if (p.personality === "LEADER") score += 2;
+    if (p.personality === "HARD_WORKER") score += 1;
+    if (p.personality === "ENERGETIC") score += 1;
+    if (p.personality === "LAID_BACK") score -= 1;
+    if (p.personality === "UNDISCIPLINED") score -= 2;
+  });
+
+  return score;
+}
+
+/**
+ * Culture progression event
+ */
+function generateCultureEvent(state) {
+  const tags = state.state.program.brand.atmosphereTags || [];
+  const staff = state.state.roster.staff;
+  const players = state.state.roster.players;
+
+  const staffBoost = staffCultureInfluence(staff);
+  const playerBoost = playerPersonalityInfluence(players);
+
+  const totalBoost = staffBoost + playerBoost;
+
+  // Add new culture tag if strong positive momentum
+  if (totalBoost >= 5) {
+    const newTag = CULTURE_TAGS[Math.floor(Math.random() * CULTURE_TAGS.length)];
+    if (!tags.includes(newTag)) {
+      tags.push(newTag);
+      return {
+        type: "CULTURE_GAIN",
+        tag: newTag,
+        boost: totalBoost
+      };
+    }
+  }
+
+  // Remove tag if negative momentum
+  if (totalBoost <= -3 && tags.length > 0) {
+    const removed = tags.pop();
+    return {
+      type: "CULTURE_LOSS",
+      tag: removed,
+      boost: totalBoost
+    };
+  }
+
+  // Neutral event
+  return {
+    type: "CULTURE_STABLE",
+    boost: totalBoost
+  };
+}
+
+/**
+ * Apply culture modifiers to roster
+ */
+function applyCultureModifiers(state) {
+  const tags = state.state.program.brand.atmosphereTags || [];
+  const players = state.state.roster.players;
+
+  players.forEach(player => {
+    let mod = 0;
+
+    if (tags.includes("ENERGY")) mod += 1;
+    if (tags.includes("TOUGHNESS")) mod += 2;
+    if (tags.includes("DISCIPLINE")) mod += 1;
+    if (tags.includes("DETAILS")) mod += 1;
+    if (tags.includes("HARD_WORK")) mod += 2;
+
+    player.cultureBoost = mod;
+  });
+
+  state.logCanonEvent({
+    type: "CULTURE_MODIFIERS_APPLIED",
+    detail: "Culture modifiers applied to roster."
+  });
+}
+
+/**
+ * Culture → recruiting impact
+ */
+function applyRecruitingCultureImpact(state) {
+  const tags = state.state.program.brand.atmosphereTags || [];
+  const board = state.state.recruiting.board;
+
+  board.forEach(p => {
+    if (tags.includes("ENERGY")) p.interest += 3;
+    if (tags.includes("TOUGHNESS")) p.interest += 2;
+    if (tags.includes("DETAILS")) p.interest += 1;
+  });
+
+  state.logCanonEvent({
+    type: "CULTURE_RECRUITING_IMPACT",
+    detail: "Culture influenced recruiting interest."
+  });
+}
+
+/**
+ * Culture → portal impact
+ */
+function applyPortalCultureImpact(state) {
+  const tags = state.state.program.brand.atmosphereTags || [];
+  const players = state.state.roster.players;
+
+  players.forEach(player => {
+    if (tags.includes("FAMILY")) player.happiness += 5;
+    if (tags.includes("ACCOUNTABILITY")) player.happiness += 3;
+  });
+
+  state.logCanonEvent({
+    type: "CULTURE_PORTAL_IMPACT",
+    detail: "Culture influenced portal retention."
+  });
+}
+
+/**
+ * Main culture engine entry point
+ */
+export function runCultureEngine(state) {
+  // Build depth chart first
+  buildDepthChart(state);
+
+  // Generate culture event
+  const event = generateCultureEvent(state);
+
+  // Apply culture modifiers
+  applyCultureModifiers(state);
+
+  // Recruiting impact
+  applyRecruitingCultureImpact(state);
+
+  // Portal impact
+  applyPortalCultureImpact(state);
+
+  // Log event
+  state.logCanonEvent({
+    type: "CULTURE_CYCLE_COMPLETE",
+    detail: "Culture cycle completed.",
+    event
+  });
+}
+
+src/engine/game/gamePlanEngine.js
+// src/engine/game/gamePlanEngine.js
+
+/**
+ * GamePlan Engine v8.0
+ * --------------------
+ * Handles:
+ * - offensive and defensive gameplan profiles
+ * - run/pass balance
+ * - aggressiveness
+ * - personnel preferences
+ * - blitz/coverage tendencies
+ * - discipline and contain bias
+ * - integration with ratingsEngine + culture
+ *
+ * Output shape:
+ * state.state.games.gamePlan = {
+ *   offensive: {
+ *     runRate,
+ *     passRate,
+ *     explosiveBias,
+ *     aggressiveness,
+ *     personnelPreference // "11", "12", "10", "HEAVY", "SPREAD"
+ *   },
+ *   defensive: {
+ *     blitzRate,
+ *     coverageRate,
+ *     containBias,
+ *     takeawayAggression,
+ *     discipline
+ *   }
+ * }
+ */
+
+/**
+ * Build offensive gameplan
+ */
+function buildOffensiveGamePlan(unitRatings, culture, opponentRatings) {
+  const OFF = unitRatings.OFF;
+  const DEF_OPP = opponentRatings?.DEF || { overall: 50 };
+
+  const cultureTags = culture?.atmosphereTags || [];
+
+  let runRate = 50;
+  let passRate = 50;
+  let explosiveBias = OFF.explosive || 50;
+  let aggressiveness = 50;
+  let personnelPreference = "11";
+
+  // If OL is strong, lean more run
+  if (OFF.runBlock >= OFF.passBlock + 5) {
+    runRate += 10;
+    personnelPreference = "12";
+  }
+
+  // If WR/RB explosiveness is high, lean more pass/spread
+  if (OFF.explosive >= 60) {
+    passRate += 10;
+    explosiveBias += 5;
+    personnelPreference = "10";
+  }
+
+  // Culture influence
+  if (cultureTags.includes("TOUGHNESS")) {
+    runRate += 5;
+    aggressiveness += 5;
+  }
+  if (cultureTags.includes("ENERGY")) {
+    passRate += 5;
+    explosiveBias += 5;
+  }
+
+  // Opponent defensive strength: if they’re strong vs run, lean pass
+  if (DEF_OPP.overall >= OFF.overall + 5) {
+    passRate += 5;
+  }
+
+  // Normalize
+  const total = runRate + passRate;
+  runRate = Math.round((runRate / total) * 100);
+  passRate = Math.round((passRate / total) * 100);
+
+  return {
+    runRate,
+    passRate,
+    explosiveBias,
+    aggressiveness,
+    personnelPreference
+  };
+}
+
+/**
+ * Build defensive gameplan
+ */
+function buildDefensiveGamePlan(unitRatings, culture, opponentRatings) {
+  const DEF = unitRatings.DEF;
+  const OFF_OPP = opponentRatings?.OFF || { explosive: 50 };
+
+  const cultureTags = culture?.atmosphereTags || [];
+
+  let blitzRate = 30;
+  let coverageRate = 70;
+  let containBias = DEF.contain || 50;
+  let takeawayAggression = DEF.takeaway || 50;
+  let discipline = DEF.discipline || 50;
+
+  // If passRush is strong, blitz more
+  if (DEF.passRush >= 60) {
+    blitzRate += 10;
+    coverageRate -= 10;
+  }
+
+  // If opponent is very explosive, increase contain and coverage
+  if (OFF_OPP.explosive >= 60) {
+    containBias += 5;
+    coverageRate += 5;
+  }
+
+  // Culture influence
+  if (cultureTags.includes("DISCIPLINE")) {
+    discipline += 5;
+    takeawayAggression -= 3; // more sound, less reckless
+  }
+  if (cultureTags.includes("TOUGHNESS")) {
+    blitzRate += 5;
+    takeawayAggression += 3;
+  }
+
+  // Normalize blitz/coverage
+  const total = blitzRate + coverageRate;
+  blitzRate = Math.round((blitzRate / total) * 100);
+  coverageRate = Math.round((coverageRate / total) * 100);
+
+  return {
+    blitzRate,
+    coverageRate,
+    containBias,
+    takeawayAggression,
+    discipline
+  };
+}
+
+/**
+ * Main gameplan engine entry point
+ */
+export function buildGamePlan(state, opponentRatings) {
+  const unitRatings = state.state.ratings.unitRatings || {
+    OFF: { overall: 50, runBlock: 50, passBlock: 50, explosive: 50, ballSecurity: 50 },
+    DEF: { overall: 50, passRush: 50, contain: 50, takeaway: 50, discipline: 50 }
+  };
+
+  const culture = state.state.program.brand || {};
+
+  const offensive = buildOffensiveGamePlan(unitRatings, culture, opponentRatings);
+  const defensive = buildDefensiveGamePlan(unitRatings, culture, opponentRatings);
+
+  state.state.games = state.state.games || {};
+  state.state.games.gamePlan = {
+    offensive,
+    defensive
+  };
+
+  state.logCanonEvent({
+    type: "GAMEPLAN_BUILT_V8",
+    detail: "Offensive and defensive gameplan built.",
+    gamePlan: state.state.games.gamePlan
+  });
+}
+
+
+src/engine/game/injuryEngine.js
+// src/engine/game/injuryEngine.js
+
+/**
+ * Injury Engine v8.0
+ * ------------------
+ * Handles:
+ * - injury probability
+ * - injury severity
+ * - recovery timelines
+ * - staff influence
+ * - toughness influence
+ * - fatigue influence
+ * - game-level injuries
+ * - practice injuries
+ * - canon logging
+ */
+
+import { buildDepthChart } from "./depthChartEngine.js";
+
+/**
+ * Base injury rates by position (per game, placeholder)
+ */
+const POSITION_INJURY_BASE = {
+  QB: 0.03,
+  RB: 0.06,
+  WR: 0.05,
+  TE: 0.05,
+  LT: 0.04,
+  LG: 0.04,
+  C: 0.04,
+  RG: 0.04,
+  RT: 0.04,
+  DE: 0.05,
+  DT: 0.05,
+  LB: 0.06,
+  CB: 0.05,
+  S: 0.05,
+  K: 0.01,
+  P: 0.01,
+  LS: 0.01
+};
+
+/**
+ * Severity buckets
+ */
+const SEVERITY_BUCKETS = [
+  { label: "QUESTIONABLE", chance: 0.5, weeks: 0 },
+  { label: "DOUBTFUL",     chance: 0.3, weeks: 1 },
+  { label: "OUT",          chance: 0.2, weeks: 2 }
+];
+
+/**
+ * Get toughness modifier from culture
+ */
+function toughnessModifier(state) {
+  const tags = state.state.program.brand.atmosphereTags || [];
+  return tags.includes("TOUGHNESS") ? -0.01 : 0;
+}
+
+/**
+ * Get conditioning modifier from staff
+ */
+function conditioningModifier(state) {
+  const staff = state.state.roster.staff || [];
+  const strengthCoach = staff.find(s => s.role === "Strength");
+  const skill = strengthCoach?.skill || 50;
+  return -(skill - 50) / 5000; // small reduction as skill rises
+}
+
+/**
+ * Fatigue modifier
+ */
+function fatigueModifier(player, fatigueLog) {
+  const entry = fatigueLog.find(f => f.playerId === player.id);
+  if (!entry) return 0;
+  if (entry.level === "MEDIUM") return 0.01;
+  if (entry.level === "HIGH") return 0.03;
+  return 0;
+}
+
+/**
+ * Calculate per-game injury probability for a player
+ */
+function calculateInjuryProbability(player, state) {
+  const base = POSITION_INJURY_BASE[player.position] || 0.03;
+  const fatigueLog = state.state.roster.fatigueLog || [];
+
+  let prob = base;
+  prob += toughnessModifier(state);
+  prob += conditioningModifier(state);
+  prob += fatigueModifier(player, fatigueLog);
+
+  return Math.max(0, prob);
+}
+
+/**
+ * Roll severity for an injury
+ */
+function rollSeverity() {
+  const r = Math.random();
+  let cumulative = 0;
+
+  for (const bucket of SEVERITY_BUCKETS) {
+    cumulative += bucket.chance;
+    if (r <= cumulative) return bucket;
+  }
+
+  return SEVERITY_BUCKETS[0];
+}
+
+/**
+ * Generate game injuries
+ */
+export function generateGameInjuries(state) {
+  const players = state.state.roster.players || [];
+  const injuries = state.state.roster.injuryLog || [];
+
+  const newInjuries = [];
+
+  players.forEach(player => {
+    const prob = calculateInjuryProbability(player, state);
+    if (Math.random() < prob) {
+      const severity = rollSeverity();
+      const injury = {
+        playerId: player.id,
+        name: player.fullName,
+        position: player.position,
+        severity: severity.label,
+        weeksRemaining: severity.weeks,
+        source: "GAME"
+      };
+      newInjuries.push(injury);
+      injuries.push(injury);
+    }
+  });
+
+  state.state.roster.injuryLog = injuries;
+
+  state.logCanonEvent({
+    type: "GAME_INJURIES",
+    detail: `${newInjuries.length} new game injuries.`,
+    injuries: newInjuries
+  });
+
+  return newInjuries;
+}
+
+/**
+ * Generate practice injuries (lighter rate)
+ */
+export function generatePracticeInjuries(state) {
+  const players = state.state.roster.players || [];
+  const injuries = state.state.roster.injuryLog || [];
+
+  const newInjuries = [];
+
+  players.forEach(player => {
+    const baseProb = calculateInjuryProbability(player, state) / 2;
+    if (Math.random() < baseProb) {
+      const severity = rollSeverity();
+      const injury = {
+        playerId: player.id,
+        name: player.fullName,
+        position: player.position,
+        severity: severity.label,
+        weeksRemaining: severity.weeks,
+        source: "PRACTICE"
+      };
+      newInjuries.push(injury);
+      injuries.push(injury);
+    }
+  });
+
+  state.state.roster.injuryLog = injuries;
+
+  state.logCanonEvent({
+    type: "PRACTICE_INJURIES",
+    detail: `${newInjuries.length} new practice injuries.`,
+    injuries: newInjuries
+  });
+
+  return newInjuries;
+}
+
+/**
+ * Advance injury recovery by one week
+ */
+export function advanceInjuryRecovery(state) {
+  const injuries = state.state.roster.injuryLog || [];
+
+  injuries.forEach(injury => {
+    if (injury.weeksRemaining > 0) {
+      injury.weeksRemaining -= 1;
+      if (injury.weeksRemaining === 0 && injury.severity !== "QUESTIONABLE") {
+        injury.severity = "QUESTIONABLE";
+      }
+    }
+  });
+
+  state.state.roster.injuryLog = injuries;
+
+  state.logCanonEvent({
+    type: "INJURY_RECOVERY_ADVANCED",
+    detail: "Injury recovery advanced by one week."
+  });
+}
+
+/**
+ * Main injury engine entry point for a game week
+ */
+export function runInjuryEngineForGameWeek(state) {
+  // Build depth chart first
+  buildDepthChart(state);
+
+  // Advance recovery
+  advanceInjuryRecovery(state);
+
+  // Generate practice injuries
+  generatePracticeInjuries(state);
+
+  // Generate game injuries
+  generateGameInjuries(state);
+
+  state.logCanonEvent({
+    type: "INJURY_CYCLE_COMPLETE",
+    detail: "Injury cycle completed for game week."
+  });
+}
+
+src/engine/game/fatigueEngine.js
+// src/engine/game/fatigueEngine.js
+
+/**
+ * Fatigue Engine v8.0
+ * -------------------
+ * Handles:
+ * - weekly fatigue accumulation
+ * - game load
+ * - practice load
+ * - recovery
+ * - staff conditioning influence
+ * - culture toughness influence
+ * - canon logging
+ */
+
+import { buildDepthChart } from "./depthChartEngine.js";
+
+/**
+ * Base game snap fatigue by position (placeholder)
+ */
+const POSITION_GAME_LOAD = {
+  QB: 0.04,
+  RB: 0.06,
+  WR: 0.05,
+  TE: 0.05,
+  LT: 0.05,
+  LG: 0.05,
+  C: 0.05,
+  RG: 0.05,
+  RT: 0.05,
+  DE: 0.06,
+  DT: 0.06,
+  LB: 0.07,
+  CB: 0.06,
+  S: 0.06,
+  K: 0.02,
+  P: 0.02,
+  LS: 0.02
+};
+
+/**
+ * Practice intensity presets
+ */
+const PRACTICE_INTENSITY = {
+  LOW: 0.01,
+  MEDIUM: 0.03,
+  HIGH: 0.05
+};
+
+/**
+ * Get conditioning recovery modifier from staff
+ */
+function conditioningRecoveryModifier(state) {
+  const staff = state.state.roster.staff || [];
+  const strengthCoach = staff.find(s => s.role === "Strength");
+  const skill = strengthCoach?.skill || 50;
+  return (skill - 50) / 5000; // small boost as skill rises
+}
+
+/**
+ * Get toughness fatigue modifier from culture
+ */
+function toughnessFatigueModifier(state) {
+  const tags = state.state.program.brand.atmosphereTags || [];
+  return tags.includes("TOUGHNESS") ? 0.005 : 0;
+}
+
+/**
+ * Initialize fatigue log if missing
+ */
+function ensureFatigueLog(state) {
+  if (!state.state.roster.fatigueLog) {
+    state.state.roster.fatigueLog = [];
+  }
+}
+
+/**
+ * Get or create fatigue entry for player
+ */
+function getFatigueEntry(state, playerId) {
+  ensureFatigueLog(state);
+  let entry = state.state.roster.fatigueLog.find(f => f.playerId === playerId);
+  if (!entry) {
+    entry = { playerId, level: "LOW", value: 0 };
+    state.state.roster.fatigueLog.push(entry);
+  }
+  return entry;
+}
+
+/**
+ * Apply game load based on snaps played
+ */
+export function applyGameLoad(state, gameStats) {
+  const players = state.state.roster.players || [];
+  const snapsByPlayer = gameStats?.snapsByPlayer || {}; // { playerId: snaps }
+
+  players.forEach(player => {
+    const snaps = snapsByPlayer[player.id] || 0;
+    const baseLoad = POSITION_GAME_LOAD[player.position] || 0.04;
+    const load = snaps * baseLoad;
+
+    const entry = getFatigueEntry(state, player.id);
+    entry.value += load;
+  });
+
+  state.logCanonEvent({
+    type: "FATIGUE_GAME_LOAD_APPLIED",
+    detail: "Game fatigue applied based on snaps."
+  });
+}
+
+/**
+ * Apply practice load based on weekly intensity
+ */
+export function applyPracticeLoad(state, intensity = "MEDIUM") {
+  const players = state.state.roster.players || [];
+  const base = PRACTICE_INTENSITY[intensity] || PRACTICE_INTENSITY.MEDIUM;
+
+  players.forEach(player => {
+    const entry = getFatigueEntry(state, player.id);
+    entry.value += base;
+  });
+
+  state.logCanonEvent({
+    type: "FATIGUE_PRACTICE_LOAD_APPLIED",
+    detail: `Practice fatigue applied at ${intensity} intensity.`
+  });
+}
+
+/**
+ * Apply weekly recovery
+ */
+export function applyWeeklyRecovery(state) {
+  ensureFatigueLog(state);
+
+  const recoveryBoost = conditioningRecoveryModifier(state);
+  const toughnessBoost = toughnessFatigueModifier(state);
+
+  state.state.roster.fatigueLog.forEach(entry => {
+    const baseRecovery = 0.05 + recoveryBoost + toughnessBoost;
+    entry.value = Math.max(0, entry.value - baseRecovery);
+  });
+
+  state.logCanonEvent({
+    type: "FATIGUE_RECOVERY_APPLIED",
+    detail: "Weekly fatigue recovery applied."
+  });
+}
+
+/**
+ * Normalize fatigue levels into LOW / MEDIUM / HIGH
+ */
+export function normalizeFatigueLevels(state) {
+  ensureFatigueLog(state);
+
+  state.state.roster.fatigueLog.forEach(entry => {
+    if (entry.value < 0.1) entry.level = "LOW";
+    else if (entry.value < 0.25) entry.level = "MEDIUM";
+    else entry.level = "HIGH";
+  });
+
+  state.logCanonEvent({
+    type: "FATIGUE_LEVELS_NORMALIZED",
+    detail: "Fatigue levels normalized to LOW/MEDIUM/HIGH."
+  });
+}
+
+/**
+ * Main fatigue engine entry point for a game week
+ */
+export function runFatigueEngineForGameWeek(state, gameStats, practiceIntensity = "MEDIUM") {
+  // Build depth chart first
+  buildDepthChart(state);
+
+  // Apply practice load
+  applyPracticeLoad(state, practiceIntensity);
+
+  // Apply game load
+  applyGameLoad(state, gameStats);
+
+  // Apply recovery
+  applyWeeklyRecovery(state);
+
+  // Normalize levels
+  normalizeFatigueLevels(state);
+
+  state.logCanonEvent({
+    type: "FATIGUE_CYCLE_COMPLETE",
+    detail: "Fatigue cycle completed for game week."
+  });
+}
+
+src/engine/presentation/gameDayFormatter.js
+// src/engine/presentation/gameDayFormatter.js
+
+/**
+ * Game Day Formatter v2.1 Bridge
+ * ------------------------------
+ * Takes raw gameStats from gameEngine v3.0 and shapes them
+ * into narrative-friendly structures for:
+ * - drive chart sections
+ * - play-by-play highlight candidates
+ * - game summary blurbs
+ */
+
+export function buildDriveChartView(gameStats) {
+  return gameStats.drives.map((entry, idx) => {
+    const d = entry.drive;
+    const s = entry.summary;
+
+    return {
+      driveNumber: idx + 1,
+      possession: entry.possession === "US" ? "UMKC" : gameStats.opponentName,
+      result: s.result,
+      startYardLine: s.startYardLine,
+      endYardLine: s.endYardLine,
+      playCount: s.playCount,
+      quarter: s.quarter,
+      clockEnd: s.clockEnd
+    };
+  });
+}
+
+export function buildPlayHighlightCandidates(gameStats) {
+  const highlights = [];
+
+  gameStats.drives.forEach((entry, driveIndex) => {
+    entry.drive.plays.forEach((p, playIndex) => {
+      if (["EXPLOSIVE", "SACK", "TURNOVER", "PENALTY"].includes(p.result)) {
+        highlights.push({
+          driveNumber: driveIndex + 1,
+          playNumber: playIndex + 1,
+          possession: entry.possession === "US" ? "UMKC" : gameStats.opponentName,
+          down: p.down,
+          distance: p.distance,
+          yardLineBefore: p.yardLineBefore,
+          playType: p.playType,
+          result: p.result,
+          yards: p.yards
+        });
+      }
+    });
+  });
+
+  return highlights;
+}
+
+export function buildGameSummaryBlurb(gameStats) {
+  const margin = gameStats.ourScore - gameStats.oppScore;
+  const resultWord = margin > 0 ? "win" : "loss";
+
+  return {
+    headline: `UMKC ${resultWord} vs ${gameStats.opponentName}, ${gameStats.ourScore}-${gameStats.oppScore}`,
+    margin,
+    result: gameStats.result,
+    opponentName: gameStats.opponentName,
+    ourScore: gameStats.ourScore,
+    oppScore: gameStats.oppScore
+  };
+}
+
+src/engine/presentation/gameDaySimRunner.js
+// src/engine/presentation/gameDaySimRunner.js
+
+/**
+ * Game Day Sim Runner v2.1
+ * ------------------------
+ * Consumes gameStats from gameEngine v3.0 and produces
+ * narrative-ready structures for the Game Day Sim Format v2.1:
+ *
+ * - Drive Chart Section
+ * - Play-by-Play Highlights
+ * - Game Summary Blurb
+ * - Coach Quotes
+ * - Media Article Draft
+ * - Fan Reaction Hooks
+ *
+ * This file does NOT simulate football. It formats the story.
+ */
+
+import {
+  buildDriveChartView,
+  buildPlayHighlightCandidates,
+  buildGameSummaryBlurb
+} from "./gameDayFormatter.js";
+
+/**
+ * Generate coach quotes based on game result + highlights
+ */
+function buildCoachQuotes(gameStats, highlights) {
+  const margin = gameStats.ourScore - gameStats.oppScore;
+  const result = margin > 0 ? "WIN" : "LOSS";
+
+  const explosivePlays = highlights.filter(h => h.result === "EXPLOSIVE");
+  const turnovers = highlights.filter(h => h.result === "TURNOVER");
+  const sacks = highlights.filter(h => h.result === "SACK");
+
+  const quotes = [];
+
+  if (result === "WIN") {
+    quotes.push(
+      "Proud of how our guys battled today. We stayed disciplined and finished drives."
+    );
+  } else {
+    quotes.push(
+      "We didn’t execute the way we needed to. Too many missed opportunities."
+    );
+  }
+
+  if (explosivePlays.length > 0) {
+    quotes.push(
+      "We knew we had chances to hit big plays, and the guys delivered when it mattered."
+    );
+  }
+
+  if (turnovers.length > 0) {
+    quotes.push(
+      "Turnovers hurt us. We have to clean that up before next week."
+    );
+  }
+
+  if (sacks.length > 0) {
+    quotes.push(
+      "Protection has to be better. We’ll address that in practice."
+    );
+  }
+
+  return quotes;
+}
+
+/**
+ * Generate media article draft
+ */
+function buildMediaArticle(gameStats, summary, highlights) {
+  const margin = gameStats.ourScore - gameStats.oppScore;
+  const resultWord = margin > 0 ? "defeated" : "fell to";
+
+  const explosiveCount = highlights.filter(h => h.result === "EXPLOSIVE").length;
+  const turnoverCount = highlights.filter(h => h.result === "TURNOVER").length;
+
+  return {
+    headline: summary.headline,
+    body: `
+In a matchup against ${summary.opponentName}, UMKC ${resultWord} their opponent by a score of ${summary.ourScore}-${summary.oppScore}.
+The Roos showed flashes of explosiveness with ${explosiveCount} big plays, but also faced adversity with ${turnoverCount} turnovers.
+
+UMKC now looks ahead to next week as they continue building momentum in their inaugural campaign.
+    `.trim()
+  };
+}
+
+/**
+ * Generate fan reaction hooks
+ */
+function buildFanReactions(gameStats, highlights) {
+  const explosive = highlights.filter(h => h.result === "EXPLOSIVE").length;
+  const turnovers = highlights.filter(h => h.result === "TURNOVER").length;
+
+  return [
+    explosive > 0
+      ? "Fans loved the explosive plays — the stadium erupted each time."
+      : "Fans were waiting for a spark that never quite came.",
+    turnovers > 0
+      ? "Turnovers had the crowd groaning — costly mistakes in key moments."
+      : "Clean football kept fans engaged throughout the game."
+  ];
+}
+
+/**
+ * Main Game Day Sim v2.1 runner
+ */
+export function runGameDaySim(gameStats) {
+  const driveChartView = buildDriveChartView(gameStats);
+  const highlightCandidates = buildPlayHighlightCandidates(gameStats);
+  const summaryBlurb = buildGameSummaryBlurb(gameStats);
+
+  const coachQuotes = buildCoachQuotes(gameStats, highlightCandidates);
+  const mediaArticle = buildMediaArticle(gameStats, summaryBlurb, highlightCandidates);
+  const fanReactions = buildFanReactions(gameStats, highlightCandidates);
+
+  return {
+    summary: summaryBlurb,
+    driveChart: driveChartView,
+    highlights: highlightCandidates,
+    coachQuotes,
+    mediaArticle,
+    fanReactions
+  };
+}
+
+src/engine/presentation/weeklyNarrativeBuilder.js
+// src/engine/presentation/weeklyNarrativeBuilder.js
+
+/**
+ * Weekly Narrative Builder v2.1
+ * -----------------------------
+ * Consumes:
+ *   - runWeeklySimulation(state) → gameStats
+ *   - runGameDaySim(gameStats) → narrative structures
+ *
+ * Produces:
+ *   - full weekly narrative package for Game Day Sim v2.1
+ *   - drive chart
+ *   - highlights
+ *   - summary blurb
+ *   - coach quotes
+ *   - media article
+ *   - fan reactions
+ *
+ * This file does NOT simulate football. It builds the story.
+ */
+
+import { runWeeklySimulation } from "../simulation/simulationLoop.js";
+import { runGameDaySim } from "./gameDaySimRunner.js";
+
+/**
+ * Build a full weekly narrative package
+ */
+export function buildWeeklyNarrative(state) {
+  // 1) Run the full weekly simulation (ratings → gameplan → game → fatigue → injuries)
+  const gameStats = runWeeklySimulation(state);
+
+  // 2) Build Game Day Sim v2.1 narrative structures
+  const gameDayOutput = runGameDaySim(gameStats);
+
+  // 3) Build a combined weekly narrative object
+  const weeklyNarrative = {
+    week: state.state.meta.currentWeek,
+    opponent: gameStats.opponentName,
+    result: gameStats.result,
+    score: `${gameStats.ourScore}-${gameStats.oppScore}`,
+    summary: gameDayOutput.summary,
+    driveChart: gameDayOutput.driveChart,
+    highlights: gameDayOutput.highlights,
+    coachQuotes: gameDayOutput.coachQuotes,
+    mediaArticle: gameDayOutput.mediaArticle,
+    fanReactions: gameDayOutput.fanReactions
+  };
+
+  // 4) Log into canon (optional but recommended)
+  state.logCanonEvent({
+    type: "WEEKLY_NARRATIVE_V2_1",
+    detail: `Weekly narrative generated for Week ${weeklyNarrative.week}.`,
+    weeklyNarrative
+  });
+
+  return weeklyNarrative;
+}
+
+src/engine/presentation/SeasonNarrativeBuilder.js
+// src/engine/presentation/SeasonNarrativeBuilder.js
+
+/**
+ * Season Narrative Builder v1.0
+ * -----------------------------
+ * Consumes:
+ *   - weeklyNarratives[] (from weeklyNarrativeBuilder.js)
+ *   - season metadata (record, prestige, recruiting momentum)
+ *
+ * Produces:
+ *   - season summary blurb
+ *   - season arc narrative
+ *   - momentum & identity report
+ *   - coach season quotes
+ *   - media season recap article
+ *   - fan season reaction summary
+ *
+ * This file does NOT simulate football. It builds the season story.
+ */
+
+/**
+ * Build season summary blurb
+ */
+function buildSeasonSummaryBlurb(weeklyNarratives, seasonMeta) {
+  const wins = weeklyNarratives.filter(w => w.result === "WIN").length;
+  const losses = weeklyNarratives.length - wins;
+
+  return {
+    headline: `UMKC finishes ${wins}-${losses} in ${seasonMeta.year}`,
+    record: `${wins}-${losses}`,
+    prestigeChange: seasonMeta.prestigeChange,
+    recruitingMomentum: seasonMeta.recruitingMomentum,
+    attendanceAvg: seasonMeta.attendanceAvg
+  };
+}
+
+/**
+ * Build season arc narrative
+ */
+function buildSeasonArcNarrative(weeklyNarratives, seasonMeta) {
+  const arcs = [];
+
+  const explosiveWeeks = weeklyNarratives.filter(w =>
+    w.highlights.some(h => h.result === "EXPLOSIVE")
+  );
+
+  const toughLosses = weeklyNarratives.filter(w =>
+    w.result === "LOSS" && w.highlights.some(h => h.result === "TURNOVER")
+  );
+
+  const rivalryGames = weeklyNarratives.filter(w =>
+    w.opponent.includes("Western Illinois") ||
+    w.opponent.includes("Missouri State") ||
+    w.opponent.includes("North Dakota")
+  );
+
+  if (explosiveWeeks.length > 0) {
+    arcs.push(
+      "UMKC showed flashes of high-powered offense, with multiple explosive-play weeks that energized the fanbase."
+    );
+  }
+
+  if (toughLosses.length > 0) {
+    arcs.push(
+      "Turnovers proved costly in several tight losses, highlighting areas for offseason improvement."
+    );
+  }
+
+  if (rivalryGames.length > 0) {
+    arcs.push(
+      "Rivalry games added emotional weight to the season, with UMKC establishing its identity in the Midwest competitive landscape."
+    );
+  }
+
+  if (seasonMeta.prestigeChange > 0) {
+    arcs.push(
+      "Program prestige grew steadily, reflecting increased respect across the FCS landscape."
+    );
+  }
+
+  if (seasonMeta.recruitingMomentum > 0) {
+    arcs.push(
+      "Recruiting momentum surged late in the season, setting the stage for a strong incoming class."
+    );
+  }
+
+  return arcs;
+}
+
+/**
+ * Build coach season quotes
+ */
+function buildCoachSeasonQuotes(weeklyNarratives, seasonMeta) {
+  const quotes = [];
+
+  quotes.push(
+    "This season was about laying the foundation. Our guys fought every week and showed what UMKC Football can become."
+  );
+
+  if (seasonMeta.prestigeChange > 0) {
+    quotes.push(
+      "You can feel the respect growing. Teams know we’re not a pushover — we’re building something real."
+    );
+  }
+
+  if (seasonMeta.recruitingMomentum > 0) {
+    quotes.push(
+      "The recruiting trail has been incredible. Kids want to be part of Kansas City’s Team."
+    );
+  }
+
+  const closeLosses = weeklyNarratives.filter(w =>
+    w.result === "LOSS" && parseInt(w.score.split("-")[0]) >= parseInt(w.score.split("-")[1]) - 7
+  );
+
+  if (closeLosses.length > 0) {
+    quotes.push(
+      "We were right there in several games. Next year, we finish those."
+    );
+  }
+
+  return quotes;
+}
+
+/**
+ * Build media season recap article
+ */
+function buildMediaSeasonRecap(summary, arcs) {
+  return {
+    headline: summary.headline,
+    body: `
+UMKC wrapped up the ${summary.record} season with clear signs of growth and identity formation.
+${arcs.join(" ")}
+
+With rising prestige, improving attendance, and strong recruiting momentum, the Roos appear poised
+to take another step forward in the coming year.
+    `.trim()
+  };
+}
+
+/**
+ * Build fan season reaction summary
+ */
+function buildFanSeasonReactions(weeklyNarratives, seasonMeta) {
+  const reactions = [];
+
+  const bigWins = weeklyNarratives.filter(w => w.result === "WIN" && parseInt(w.score.split("-")[0]) - parseInt(w.score.split("-")[1]) >= 14);
+
+  if (bigWins.length > 0) {
+    reactions.push("Fans loved the statement wins — proof that UMKC can dominate when firing on all cylinders.");
+  }
+
+  if (seasonMeta.attendanceAvg > 8000) {
+    reactions.push("Attendance surged, showing Kansas City’s growing support for the Roos.");
+  }
+
+  const heartbreakLosses = weeklyNarratives.filter(w =>
+    w.result === "LOSS" && w.highlights.some(h => h.result === "TURNOVER")
+  );
+
+  if (heartbreakLosses.length > 0) {
+    reactions.push("Turnovers in key moments frustrated fans, but they remained loyal and optimistic.");
+  }
+
+  reactions.push("Overall, fans believe the program is on the rise and eagerly await next season.");
+
+  return reactions;
+}
+
+/**
+ * Main Season Narrative Builder v1.0
+ */
+export function buildSeasonNarrative(weeklyNarratives, seasonMeta, state) {
+  const summary = buildSeasonSummaryBlurb(weeklyNarratives, seasonMeta);
+  const arcs = buildSeasonArcNarrative(weeklyNarratives, seasonMeta);
+  const coachQuotes = buildCoachSeasonQuotes(weeklyNarratives, seasonMeta);
+  const mediaRecap = buildMediaSeasonRecap(summary, arcs);
+  const fanReactions = buildFanSeasonReactions(weeklyNarratives, seasonMeta);
+
+  const seasonNarrative = {
+    summary,
+    arcs,
+    coachQuotes,
+    mediaRecap,
+    fanReactions
+  };
+
+  // Log into canon
+  state.logCanonEvent({
+    type: "SEASON_NARRATIVE_V1_0",
+    detail: `Season narrative generated for ${seasonMeta.year}.`,
+    seasonNarrative
+  });
+
+  return seasonNarrative;
+}
+
+src/engine/presentation/OffseasonNarrativeBuilder.js
+// src/engine/presentation/OffseasonNarrativeBuilder.js
+
+/**
+ * Offseason Narrative Builder v1.0
+ * --------------------------------
+ * Consumes:
+ *   - seasonNarrative (from SeasonNarrativeBuilder.js)
+ *   - roster changes (portal, recruiting, graduations)
+ *   - staff changes
+ *   - culture evolution
+ *   - preseason expectations
+ *
+ * Produces:
+ *   - offseason recap
+ *   - recruiting class narrative
+ *   - portal movement storyline
+ *   - staff change storyline
+ *   - culture evolution narrative
+ *   - preseason expectations narrative
+ *
+ * This file does NOT simulate football. It builds the offseason story.
+ */
+
+/**
+ * Build recruiting class narrative
+ */
+function buildRecruitingNarrative(recruitingClass) {
+  const size = recruitingClass.length;
+  const stars = recruitingClass.reduce((sum, r) => sum + (r.stars || 0), 0);
+  const avgStars = size > 0 ? (stars / size).toFixed(1) : "0.0";
+
+  const headline = size >= 20
+    ? "UMKC lands a massive recruiting class, signaling aggressive growth."
+    : size >= 12
+    ? "UMKC secures a solid recruiting class with key foundational pieces."
+    : "A smaller but targeted recruiting class arrives in Kansas City.";
+
+  const body = `
+UMKC signed ${size} recruits this offseason, averaging ${avgStars} stars.
+The class includes several developmental prospects and a few immediate-impact players
+who could push for early playing time in the Roos' system.
+  `.trim();
+
+  return { headline, body };
+}
+
+/**
+ * Build portal movement narrative
+ */
+function buildPortalNarrative(portalMoves) {
+  const incoming = portalMoves.filter(p => p.type === "IN");
+  const outgoing = portalMoves.filter(p => p.type === "OUT");
+
+  const headline =
+    incoming.length > outgoing.length
+      ? "UMKC wins the portal battle, adding key contributors."
+      : outgoing.length > incoming.length
+      ? "UMKC faces roster turnover as several players depart through the portal."
+      : "UMKC holds steady in the portal with balanced movement.";
+
+  const body = `
+Incoming transfers: ${incoming.length}
+Outgoing transfers: ${outgoing.length}
+
+UMKC's staff focused on filling immediate needs while maintaining roster stability.
+  `.trim();
+
+  return { headline, body };
+}
+
+/**
+ * Build staff change narrative
+ */
+function buildStaffNarrative(staffChanges) {
+  if (!staffChanges || staffChanges.length === 0) {
+    return {
+      headline: "Staff continuity defines the offseason.",
+      body: "UMKC retains its full coaching staff, providing stability heading into next season."
+    };
+  }
+
+  const headline = "UMKC undergoes key staff changes this offseason.";
+  const body = `
+The Roos saw ${staffChanges.length} staff adjustments, including:
+${staffChanges.map(s => `- ${s.role}: ${s.change}`).join("\n")}
+
+These moves reflect UMKC's commitment to evolving its identity and strengthening its foundation.
+  `.trim();
+
+  return { headline, body };
+}
+
+/**
+ * Build culture evolution narrative
+ */
+function buildCultureNarrative(cultureTags) {
+  const tags = cultureTags || [];
+
+  const headline = "Program culture continues to evolve.";
+
+  const body = `
+UMKC's identity sharpened this offseason, with emphasis on:
+${tags.map(t => `- ${t}`).join("\n")}
+
+Players and staff alike describe a growing sense of purpose and unity.
+  `.trim();
+
+  return { headline, body };
+}
+
+/**
+ * Build preseason expectations narrative
+ */
+function buildPreseasonExpectations(seasonMeta, recruitingClass, portalMoves) {
+  const returningTalent = seasonMeta.returningStarters || 0;
+  const incomingImpact = recruitingClass.filter(r => r.stars >= 3).length;
+  const portalImpact = portalMoves.filter(p => p.type === "IN").length;
+
+  const headline = "Preseason expectations rise as UMKC enters a new chapter.";
+
+  const body = `
+UMKC returns ${returningTalent} starters, adds ${incomingImpact} high-upside recruits,
+and welcomes ${portalImpact} impact transfers.
+
+Analysts project UMKC to take another step forward, with potential to surprise in conference play.
+  `.trim();
+
+  return { headline, body };
+}
+
+/**
+ * Main Offseason Narrative Builder v1.0
+ */
+export function buildOffseasonNarrative(seasonNarrative, offseasonData, state) {
+  const {
+    recruitingClass = [],
+    portalMoves = [],
+    staffChanges = [],
+    cultureTags = [],
+    seasonMeta = {}
+  } = offseasonData;
+
+  const recruiting = buildRecruitingNarrative(recruitingClass);
+  const portal = buildPortalNarrative(portalMoves);
+  const staff = buildStaffNarrative(staffChanges);
+  const culture = buildCultureNarrative(cultureTags);
+  const preseason = buildPreseasonExpectations(
+    seasonMeta,
+    recruitingClass,
+    portalMoves
+  );
+
+  const offseasonNarrative = {
+    recruiting,
+    portal,
+    staff,
+    culture,
+    preseason
+  };
+
+  // Log into canon
+  state.logCanonEvent({
+    type: "OFFSEASON_NARRATIVE_V1_0",
+    detail: `Offseason narrative generated for ${seasonMeta.year}.`,
+    offseasonNarrative
+  });
+
+  return offseasonNarrative;
+}
+
+src/engine/presentation/ProgramHistoryBuilder.js
+// src/engine/presentation/ProgramHistoryBuilder.js
+
+/**
+ * Program History Builder v1.0
+ * ----------------------------
+ * Consumes:
+ *   - yearbooks[] (from YearbookBuilder.js)
+ *   - long-term program metadata
+ *
+ * Produces:
+ *   - dynasty arc narrative
+ *   - rivalry history
+ *   - prestige growth timeline
+ *   - coach career narrative
+ *   - recruiting pipeline narrative
+ *   - records & milestones
+ *
+ * This file does NOT simulate football. It builds multi-year history.
+ */
+
+/**
+ * Build prestige growth timeline
+ */
+function buildPrestigeTimeline(yearbooks) {
+  return yearbooks.map(y => ({
+    year: y.year,
+    prestigeChange: y.prestigeChange,
+    record: y.record
+  }));
+}
+
+/**
+ * Build rivalry history
+ */
+function buildRivalryHistory(yearbooks) {
+  const rivalNames = ["Western Illinois", "Missouri State", "North Dakota"];
+  const history = [];
+
+  yearbooks.forEach(y => {
+    y.weeklyNarratives.forEach(w => {
+      if (rivalNames.some(r => w.opponent.includes(r))) {
+        history.push({
+          year: y.year,
+          week: w.week,
+          opponent: w.opponent,
+          result: w.result,
+          score: w.score,
+          headline: w.summary.headline
+        });
+      }
+    });
+  });
+
+  return history;
+}
+
+/**
+ * Build coach career narrative
+ */
+function buildCoachCareerNarrative(yearbooks, coachName) {
+  const arcs = [];
+
+  const totalWins = yearbooks.reduce(
+    (sum, y) => sum + (parseInt(y.record.split("-")[0]) || 0),
+    0
+  );
+
+  const totalLosses = yearbooks.reduce(
+    (sum, y) => sum + (parseInt(y.record.split("-")[1]) || 0),
+    0
+  );
+
+  arcs.push(
+    `${coachName} has guided UMKC through ${yearbooks.length} seasons, compiling a ${totalWins}-${totalLosses} record.`
+  );
+
+  const prestigeGrowth = yearbooks.reduce(
+    (sum, y) => sum + (y.prestigeChange || 0),
+    0
+  );
+
+  if (prestigeGrowth > 0) {
+    arcs.push(
+      `Under ${coachName}, program prestige has steadily risen, reflecting increased respect across the FCS landscape.`
+    );
+  }
+
+  const bigWins = yearbooks.flatMap(y =>
+    y.weeklyNarratives.filter(
+      w => w.result === "WIN" &&
+      parseInt(w.score.split("-")[0]) - parseInt(w.score.split("-")[1]) >= 14
+    )
+  );
+
+  if (bigWins.length > 0) {
+    arcs.push(
+      `${coachName}'s tenure includes several statement victories that energized the fanbase and showcased UMKC's potential.`
+    );
+  }
+
+  return arcs;
+}
+
+/**
+ * Build recruiting pipeline narrative
+ */
+function buildRecruitingPipelineNarrative(yearbooks) {
+  const pipeline = {};
+
+  yearbooks.forEach(y => {
+    y.recruitingClass.forEach(r => {
+      const region = r.hometown?.split(", ").pop() || "Unknown";
+      pipeline[region] = (pipeline[region] || 0) + 1;
+    });
+  });
+
+  const arcs = [];
+
+  Object.entries(pipeline).forEach(([region, count]) => {
+    arcs.push(`UMKC has built a growing pipeline in ${region}, signing ${count} recruits over multiple seasons.`);
+  });
+
+  return arcs;
+}
+
+/**
+ * Build records & milestones
+ */
+function buildRecordsAndMilestones(yearbooks) {
+  const milestones = [];
+
+  yearbooks.forEach(y => {
+    const wins = parseInt(y.record.split("-")[0]);
+    if (wins >= 6) {
+      milestones.push({
+        year: y.year,
+        type: "Winning Season",
+        detail: `UMKC posted a winning record at ${wins} wins.`
+      });
+    }
+
+    if (y.prestigeChange > 0) {
+      milestones.push({
+        year: y.year,
+        type: "Prestige Growth",
+        detail: `Program prestige increased by ${y.prestigeChange}.`
+      });
+    }
+  });
+
+  return milestones;
+}
+
+/**
+ * Main Program History Builder v1.0
+ */
+export function buildProgramHistory(yearbooks, programMeta, state) {
+  const prestigeTimeline = buildPrestigeTimeline(yearbooks);
+  const rivalryHistory = buildRivalryHistory(yearbooks);
+  const coachCareer = buildCoachCareerNarrative(yearbooks, programMeta.headCoach);
+  const recruitingPipeline = buildRecruitingPipelineNarrative(yearbooks);
+  const milestones = buildRecordsAndMilestones(yearbooks);
+
+  const programHistory = {
+    seasons: yearbooks,
+    prestigeTimeline,
+    rivalryHistory,
+    coachCareer,
+    recruitingPipeline,
+    milestones,
+    programMeta
+  };
+
+  // Log into canon
+  state.logCanonEvent({
+    type: "PROGRAM_HISTORY_V1_0",
+    detail: `Program history compiled across ${yearbooks.length} seasons.`,
+    programHistory
+  });
+
+  return programHistory;
+}
+
+
+src/engine/presentation/YearbookBuilder.js
+// src/engine/presentation/YearbookBuilder.js
+
+/**
+ * Yearbook Builder v1.0
+ * ---------------------
+ * Consumes:
+ *   - weeklyNarratives[] (from weeklyNarrativeBuilder.js)
+ *   - seasonNarrative (from SeasonNarrativeBuilder.js)
+ *   - offseasonNarrative (from OffseasonNarrativeBuilder.js)
+ *   - statistical leaders
+ *   - team awards
+ *   - player awards
+ *
+ * Produces:
+ *   - full season yearbook object
+ *   - ready for UI, PDF export, or canon storage
+ *
+ * This file does NOT simulate football. It compiles the story.
+ */
+
+/**
+ * Build statistical leaders section
+ */
+function buildStatisticalLeaders(stats) {
+  return {
+    passingLeader: stats.passingLeader || null,
+    rushingLeader: stats.rushingLeader || null,
+    receivingLeader: stats.receivingLeader || null,
+    tackleLeader: stats.tackleLeader || null,
+    sackLeader: stats.sackLeader || null,
+    turnoverLeader: stats.turnoverLeader || null
+  };
+}
+
+/**
+ * Build awards section
+ */
+function buildAwardsSection(awards) {
+  return {
+    teamAwards: awards.teamAwards || [],
+    playerAwards: awards.playerAwards || []
+  };
+}
+
+/**
+ * Build season timeline (week-by-week headlines)
+ */
+function buildSeasonTimeline(weeklyNarratives) {
+  return weeklyNarratives.map(w => ({
+    week: w.week,
+    opponent: w.opponent,
+    result: w.result,
+    score: w.score,
+    headline: w.summary.headline
+  }));
+}
+
+/**
+ * Build recruiting class summary for yearbook
+ */
+function buildRecruitingClassSummary(recruitingClass) {
+  return recruitingClass.map(r => ({
+    name: r.name,
+    position: r.position,
+    stars: r.stars,
+    hometown: r.hometown
+  }));
+}
+
+/**
+ * Build portal summary for yearbook
+ */
+function buildPortalSummary(portalMoves) {
+  return portalMoves.map(p => ({
+    name: p.name,
+    position: p.position,
+    type: p.type, // IN or OUT
+    from: p.from,
+    to: p.to
+  }));
+}
+
+/**
+ * Main Yearbook Builder v1.0
+ */
+export function buildSeasonYearbook({
+  weeklyNarratives,
+  seasonNarrative,
+  offseasonNarrative,
+  stats,
+  awards,
+  recruitingClass,
+  portalMoves,
+  staffChanges,
+  cultureTags,
+  seasonMeta
+}, state) {
+
+  const statisticalLeaders = buildStatisticalLeaders(stats);
+  const awardsSection = buildAwardsSection(awards);
+  const seasonTimeline = buildSeasonTimeline(weeklyNarratives);
+  const recruitingSummary = buildRecruitingClassSummary(recruitingClass);
+  const portalSummary = buildPortalSummary(portalMoves);
+
+  const yearbook = {
+    year: seasonMeta.year,
+    record: seasonNarrative.summary.record,
+    weeklyNarratives,
+    seasonNarrative,
+    offseasonNarrative,
+    statisticalLeaders,
+    awards: awardsSection,
+    seasonTimeline,
+    recruitingClass: recruitingSummary,
+    portalMoves: portalSummary,
+    staffChanges,
+    cultureTags,
+    attendanceAvg: seasonMeta.attendanceAvg,
+    prestigeChange: seasonMeta.prestigeChange
+  };
+
+  // Log into canon
+  state.logCanonEvent({
+    type: "YEARBOOK_V1_0",
+    detail: `Season yearbook compiled for ${seasonMeta.year}.`,
+    yearbook
+  });
+
+  return yearbook;
+}
+
+
+src/app/stateSave.js
+// src/app/stateSave.js
+
+/**
+ * Safely save the current state to localStorage.
+ * Prevents crashes, handles serialization errors, and avoids corrupt writes.
+ */
+export function saveState(saveKey, state) {
+  try {
+    if (!state || typeof state !== "object") {
+      console.warn("[v8] Cannot save: state is not an object");
+      return;
+    }
+
+    const serialized = JSON.stringify(state);
+
+    localStorage.setItem(saveKey, serialized);
+  } catch (err) {
+    console.warn("[v8] Failed to save state:", err);
+  }
+}
+
+src/app/stateLoad.js
+// src/app/stateLoad.js
+
+/**
+ * Load saved state from localStorage.
+ * Returns null if no save exists or if the save is corrupted.
+ */
+export function loadState(saveKey) {
+  try {
+    const raw = localStorage.getItem(saveKey);
+
+    if (!raw) {
+      return null; // No saved state found
+    }
+
+    const parsed = JSON.parse(raw);
+
+    // Ensure parsed is an object
+    if (typeof parsed !== "object" || parsed === null) {
+      console.warn("[v8] Saved state corrupted: not an object");
+      return null;
+    }
+
+    return parsed;
+  } catch (err) {
+    console.warn("[v8] Failed to load saved state:", err);
+    return null;
+  }
+}
+
+src/engine/presentation/DynastyExportBuilder.js
+// src/engine/presentation/DynastyExportBuilder.js
+
+/**
+ * Dynasty Export Builder v1.0
+ * ---------------------------
+ * Consumes:
+ *   - programHistory (from ProgramHistoryBuilder.js)
+ *   - yearbooks[] (from YearbookBuilder.js)
+ *   - canon logs
+ *   - program metadata
+ *
+ * Produces:
+ *   - full dynasty export object
+ *   - ready for JSON serialization, UI display, or save-file storage
+ *
+ * This file does NOT simulate football. It compiles the entire dynasty.
+ */
+
+/**
+ * Build dynasty metadata block
+ */
+function buildDynastyMetadata(programMeta, yearbooks) {
+  return {
+    programName: programMeta.programName,
+    headCoach: programMeta.headCoach,
+    inauguralYear: programMeta.inauguralYear,
+    totalSeasons: yearbooks.length,
+    lastUpdated: new Date().toISOString(),
+    version: "v1.0"
+  };
+}
+
+/**
+ * Build canon export block
+ */
+function buildCanonExport(state) {
+  return {
+    canonEvents: state.state.canonLog || [],
+    totalEvents: (state.state.canonLog || []).length
+  };
+}
+
+/**
+ * Build dynasty timeline (season-by-season headlines)
+ */
+function buildDynastyTimeline(yearbooks) {
+  return yearbooks.map(y => ({
+    year: y.year,
+    record: y.record,
+    headline: y.seasonNarrative.summary.headline,
+    prestigeChange: y.prestigeChange
+  }));
+}
+
+/**
+ * Main Dynasty Export Builder v1.0
+ */
+export function buildDynastyExport(programHistory, yearbooks, programMeta, state) {
+  const metadata = buildDynastyMetadata(programMeta, yearbooks);
+  const canon = buildCanonExport(state);
+  const timeline = buildDynastyTimeline(yearbooks);
+
+  const dynastyExport = {
+    metadata,
+    timeline,
+    programHistory,
+    seasons: yearbooks,
+    canon
+  };
+
+  // Log into canon
+  state.logCanonEvent({
+    type: "DYNASTY_EXPORT_V1_0",
+    detail: `Dynasty export compiled across ${yearbooks.length} seasons.`,
+    dynastyExport
+  });
+
+  return dynastyExport;
+}
+
+src/engine/presentation/DynastyImportLoader.js
+// src/engine/presentation/DynastyImportLoader.js
+
+/**
+ * Dynasty Import Loader v1.0
+ * --------------------------
+ * Consumes:
+ *   - dynastyExport (from DynastyExportBuilder.js)
+ *
+ * Produces:
+ *   - reconstructed state object
+ *   - restored program history
+ *   - restored yearbooks
+ *   - restored canon logs
+ *   - restored metadata
+ *
+ * This file does NOT simulate football. It loads the entire dynasty.
+ */
+
+/**
+ * Validate basic structure of dynasty export
+ */
+function validateDynastyExport(exportObj) {
+  if (!exportObj || typeof exportObj !== "object") {
+    throw new Error("Invalid dynasty export: not an object.");
+  }
+
+  const requiredFields = ["metadata", "timeline", "programHistory", "seasons", "canon"];
+
+  requiredFields.forEach(field => {
+    if (!exportObj[field]) {
+      throw new Error(`Invalid dynasty export: missing field '${field}'.`);
+    }
+  });
+
+  return true;
+}
+
+/**
+ * Rebuild program metadata
+ */
+function rebuildProgramMeta(metadata) {
+  return {
+    programName: metadata.programName,
+    headCoach: metadata.headCoach,
+    inauguralYear: metadata.inauguralYear,
+    totalSeasons: metadata.totalSeasons,
+    lastUpdated: metadata.lastUpdated,
+    version: metadata.version
+  };
+}
+
+/**
+ * Rebuild canon log
+ */
+function rebuildCanonLog(canon) {
+  return canon.canonEvents || [];
+}
+
+/**
+ * Rebuild seasons (yearbooks)
+ */
+function rebuildSeasons(seasons) {
+  return seasons.map(s => ({
+    year: s.year,
+    record: s.record,
+    weeklyNarratives: s.weeklyNarratives,
+    seasonNarrative: s.seasonNarrative,
+    offseasonNarrative: s.offseasonNarrative,
+    statisticalLeaders: s.statisticalLeaders,
+    awards: s.awards,
+    seasonTimeline: s.seasonTimeline,
+    recruitingClass: s.recruitingClass,
+    portalMoves: s.portalMoves,
+    staffChanges: s.staffChanges,
+    cultureTags: s.cultureTags,
+    attendanceAvg: s.attendanceAvg,
+    prestigeChange: s.prestigeChange
+  }));
+}
+
+/**
+ * Rebuild program history
+ */
+function rebuildProgramHistory(programHistory) {
+  return {
+    seasons: programHistory.seasons,
+    prestigeTimeline: programHistory.prestigeTimeline,
+    rivalryHistory: programHistory.rivalryHistory,
+    coachCareer: programHistory.coachCareer,
+    recruitingPipeline: programHistory.recruitingPipeline,
+    milestones: programHistory.milestones,
+    programMeta: programHistory.programMeta
+  };
+}
+
+/**
+ * Main Dynasty Import Loader v1.0
+ */
+export function loadDynastyExport(exportObj, state) {
+  // 1) Validate structure
+  validateDynastyExport(exportObj);
+
+  // 2) Rebuild metadata
+  const programMeta = rebuildProgramMeta(exportObj.metadata);
+
+  // 3) Rebuild canon
+  const canonLog = rebuildCanonLog(exportObj.canon);
+
+  // 4) Rebuild seasons (yearbooks)
+  const seasons = rebuildSeasons(exportObj.seasons);
+
+  // 5) Rebuild program history
+  const programHistory = rebuildProgramHistory(exportObj.programHistory);
+
+  // 6) Rebuild state object
+  const reconstructedState = {
+    state: {
+      meta: {
+        programName: programMeta.programName,
+        headCoach: programMeta.headCoach,
+        inauguralYear: programMeta.inauguralYear,
+        totalSeasons: programMeta.totalSeasons,
+        lastUpdated: programMeta.lastUpdated,
+        version: programMeta.version
+      },
+      canonLog,
+      programHistory,
+      seasons
+    }
+  };
+
+  // 7) Log into canon
+  reconstructedState.state.canonLog.push({
+    type: "DYNASTY_IMPORT_V1_0",
+    detail: `Dynasty import loaded for ${programMeta.programName}.`,
+    timestamp: new Date().toISOString()
+  });
+
+  return reconstructedState;
+}
+
+src/engine/presentation/DynastyDashboardBuilder.js
+// src/engine/presentation/DynastyDashboardBuilder.js
+
+/**
+ * Dynasty Dashboard Builder v1.0
+ * ------------------------------
+ * Consumes:
+ *   - programHistory (multi-season)
+ *   - yearbooks[]
+ *   - program metadata
+ *
+ * Produces:
+ *   - UI-ready dashboard objects:
+ *     - season cards
+ *     - rivalry cards
+ *     - prestige graph data
+ *     - attendance graph data
+ *     - recruiting pipeline chart
+ *     - coach career summary
+ *     - dynasty timeline overview
+ *
+ * This file does NOT simulate football. It formats data for UI.
+ */
+
+/**
+ * Build season cards for dashboard
+ */
+function buildSeasonCards(yearbooks) {
+  return yearbooks.map(y => ({
+    year: y.year,
+    record: y.record,
+    headline: y.seasonNarrative.summary.headline,
+    prestigeChange: y.prestigeChange,
+    attendanceAvg: y.attendanceAvg,
+    keyMoments: y.seasonTimeline.slice(0, 3) // top 3 headlines
+  }));
+}
+
+/**
+ * Build rivalry cards
+ */
+function buildRivalryCards(programHistory) {
+  const grouped = {};
+
+  programHistory.rivalryHistory.forEach(r => {
+    if (!grouped[r.opponent]) grouped[r.opponent] = [];
+    grouped[r.opponent].push(r);
+  });
+
+  return Object.entries(grouped).map(([opponent, games]) => ({
+    opponent,
+    totalMeetings: games.length,
+    wins: games.filter(g => g.result === "WIN").length,
+    losses: games.filter(g => g.result === "LOSS").length,
+    recentHeadline: games[games.length - 1]?.headline || "No recent game",
+    history: games
+  }));
+}
+
+/**
+ * Build prestige graph data
+ */
+function buildPrestigeGraph(programHistory) {
+  return programHistory.prestigeTimeline.map(p => ({
+    year: p.year,
+    prestigeChange: p.prestigeChange,
+    record: p.record
+  }));
+}
+
+/**
+ * Build attendance graph data
+ */
+function buildAttendanceGraph(yearbooks) {
+  return yearbooks.map(y => ({
+    year: y.year,
+    attendanceAvg: y.attendanceAvg
+  }));
+}
+
+/**
+ * Build recruiting pipeline chart
+ */
+function buildRecruitingPipelineChart(programHistory) {
+  return programHistory.recruitingPipeline.map(entry => ({
+    region: entry.split(" ").slice(-1)[0], // last word (region)
+    count: parseInt(entry.match(/\d+/)?.[0] || 0)
+  }));
+}
+
+/**
+ * Build coach career summary
+ */
+function buildCoachCareerSummary(programHistory) {
+  return {
+    headCoach: programHistory.programMeta.headCoach,
+    seasons: programHistory.seasons.length,
+    careerRecord: programHistory.coachCareer[0] || "",
+    careerNarrative: programHistory.coachCareer
+  };
+}
+
+/**
+ * Build dynasty timeline overview
+ */
+function buildDynastyTimeline(yearbooks) {
+  return yearbooks.map(y => ({
+    year: y.year,
+    record: y.record,
+    headline: y.seasonNarrative.summary.headline,
+    prestigeChange: y.prestigeChange
+  }));
+}
+
+/**
+ * Main Dynasty Dashboard Builder v1.0
+ */
+export function buildDynastyDashboard(programHistory, yearbooks, programMeta, state) {
+  const seasonCards = buildSeasonCards(yearbooks);
+  const rivalryCards = buildRivalryCards(programHistory);
+  const prestigeGraph = buildPrestigeGraph(programHistory);
+  const attendanceGraph = buildAttendanceGraph(yearbooks);
+  const recruitingPipelineChart = buildRecruitingPipelineChart(programHistory);
+  const coachCareerSummary = buildCoachCareerSummary(programHistory);
+  const dynastyTimeline = buildDynastyTimeline(yearbooks);
+
+  const dashboard = {
+    metadata: {
+      programName: programMeta.programName,
+      headCoach: programMeta.headCoach,
+      inauguralYear: programMeta.inauguralYear,
+      totalSeasons: yearbooks.length
+    },
+    seasonCards,
+    rivalryCards,
+    prestigeGraph,
+    attendanceGraph,
+    recruitingPipelineChart,
+    coachCareerSummary,
+    dynastyTimeline
+  };
+
+  // Log into canon
+  state.logCanonEvent({
+    type: "DYNASTY_DASHBOARD_V1_0",
+    detail: `Dynasty dashboard compiled across ${yearbooks.length} seasons.`,
+    dashboard
+  });
+
+  return dashboard;
+}
+
+src/engine/presentation/DynastyAPIAdapter.js
+// src/engine/presentation/DynastyAPIAdapter.js
+
+/**
+ * Dynasty API Adapter v1.0
+ * ------------------------
+ * Consumes:
+ *   - dynastyExport (full dynasty object)
+ *   - programHistory
+ *   - yearbooks[]
+ *   - dashboard data
+ *
+ * Produces:
+ *   - normalized API-ready objects
+ *   - stable field names
+ *   - flattened structures for REST/GraphQL
+ *
+ * This file does NOT simulate football. It adapts data for APIs.
+ */
+
+/**
+ * Normalize season card for API
+ */
+function normalizeSeasonCard(card) {
+  return {
+    year: card.year,
+    record: card.record,
+    headline: card.headline,
+    prestigeChange: card.prestigeChange,
+    attendanceAvg: card.attendanceAvg,
+    keyMoments: card.keyMoments
+  };
+}
+
+/**
+ * Normalize rivalry card
+ */
+function normalizeRivalryCard(card) {
+  return {
+    opponent: card.opponent,
+    totalMeetings: card.totalMeetings,
+    wins: card.wins,
+    losses: card.losses,
+    recentHeadline: card.recentHeadline,
+    history: card.history
+  };
+}
+
+/**
+ * Normalize prestige graph data
+ */
+function normalizePrestigeGraph(graph) {
+  return graph.map(p => ({
+    year: p.year,
+    prestigeChange: p.prestigeChange,
+    record: p.record
+  }));
+}
+
+/**
+ * Normalize attendance graph data
+ */
+function normalizeAttendanceGraph(graph) {
+  return graph.map(a => ({
+    year: a.year,
+    attendanceAvg: a.attendanceAvg
+  }));
+}
+
+/**
+ * Normalize recruiting pipeline chart
+ */
+function normalizeRecruitingPipeline(chart) {
+  return chart.map(entry => ({
+    region: entry.region,
+    count: entry.count
+  }));
+}
+
+/**
+ * Normalize coach career summary
+ */
+function normalizeCoachCareer(summary) {
+  return {
+    headCoach: summary.headCoach,
+    seasons: summary.seasons,
+    careerRecord: summary.careerRecord,
+    narrative: summary.careerNarrative
+  };
+}
+
+/**
+ * Normalize dynasty timeline
+ */
+function normalizeDynastyTimeline(timeline) {
+  return timeline.map(t => ({
+    year: t.year,
+    record: t.record,
+    headline: t.headline,
+    prestigeChange: t.prestigeChange
+  }));
+}
+
+/**
+ * Main Dynasty API Adapter v1.0
+ */
+export function buildDynastyAPIResponse({
+  dynastyExport,
+  dashboard
+}) {
+  return {
+    metadata: dynastyExport.metadata,
+    canon: dynastyExport.canon,
+    programHistory: dynastyExport.programHistory,
+    seasons: dynastyExport.seasons,
+
+    dashboard: {
+      seasonCards: dashboard.seasonCards.map(normalizeSeasonCard),
+      rivalryCards: dashboard.rivalryCards.map(normalizeRivalryCard),
+      prestigeGraph: normalizePrestigeGraph(dashboard.prestigeGraph),
+      attendanceGraph: normalizeAttendanceGraph(dashboard.attendanceGraph),
+      recruitingPipeline: normalizeRecruitingPipeline(dashboard.recruitingPipelineChart),
+      coachCareer: normalizeCoachCareer(dashboard.coachCareerSummary),
+      dynastyTimeline: normalizeDynastyTimeline(dashboard.dynastyTimeline)
+    }
+  };
+}
+
+src/server/DynastyServerRoutes.js
+// src/server/DynastyServerRoutes.js
+
+/**
+ * Dynasty Server Routes v1.0
+ * --------------------------
+ * Provides REST-style endpoints for:
+ *   - dynasty export
+ *   - dynasty import
+ *   - seasons
+ *   - program history
+ *   - dashboard data
+ *
+ * This file does NOT simulate football. It exposes your dynasty via API.
+ */
+
+import { buildDynastyExport } from "../engine/presentation/DynastyExportBuilder.js";
+import { loadDynastyExport } from "../engine/presentation/DynastyImportLoader.js";
+import { buildDynastyDashboard } from "../engine/presentation/DynastyDashboardBuilder.js";
+import { buildProgramHistory } from "../engine/presentation/ProgramHistoryBuilder.js";
+
+/**
+ * Register all dynasty routes
+ */
+export function registerDynastyRoutes(app, state) {
+  /**
+   * GET /api/dynasty/export
+   * Returns full dynasty export object
+   */
+  app.get("/api/dynasty/export", (req, res) => {
+    try {
+      const programHistory = state.state.programHistory;
+      const yearbooks = state.state.seasons;
+      const programMeta = state.state.meta;
+
+      const dynastyExport = buildDynastyExport(
+        programHistory,
+        yearbooks,
+        programMeta,
+        state
+      );
+
+      res.json(dynastyExport);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * POST /api/dynasty/import
+   * Loads a dynasty export file into state
+   */
+  app.post("/api/dynasty/import", (req, res) => {
+    try {
+      const exportObj = req.body;
+      const reconstructedState = loadDynastyExport(exportObj, state);
+
+      // Replace global state
+      state.state = reconstructedState.state;
+
+      res.json({ status: "success", message: "Dynasty imported successfully." });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/dynasty/seasons
+   * Returns all yearbooks (season summaries)
+   */
+  app.get("/api/dynasty/seasons", (req, res) => {
+    try {
+      res.json(state.state.seasons || []);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/dynasty/history
+   * Returns full program history
+   */
+  app.get("/api/dynasty/history", (req, res) => {
+    try {
+      const programHistory = buildProgramHistory(
+        state.state.seasons,
+        state.state.programHistory.programMeta,
+        state
+      );
+
+      res.json(programHistory);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/dynasty/dashboard
+   * Returns UI-ready dashboard data
+   */
+  app.get("/api/dynasty/dashboard", (req, res) => {
+    try {
+      const programHistory = state.state.programHistory;
+      const yearbooks = state.state.seasons;
+      const programMeta = state.state.meta;
+
+      const dashboard = buildDynastyDashboard(
+        programHistory,
+        yearbooks,
+        programMeta,
+        state
+      );
+
+      res.json(dashboard);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/dynasty/meta
+   * Returns program metadata
+   */
+  app.get("/api/dynasty/meta", (req, res) => {
+    try {
+      res.json(state.state.meta || {});
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+}
+
+src/server/DynastyWebServer.js
+// src/server/DynastyWebServer.js
+
+/**
+ * Dynasty Web Server v1.0
+ * -----------------------
+ * Boots an Express.js server and exposes:
+ *   - dynasty export
+ *   - dynasty import
+ *   - seasons
+ *   - program history
+ *   - dashboard data
+ *   - metadata
+ *
+ * This file does NOT simulate football. It serves your dynasty API.
+ */
+
+import express from "express";
+import cors from "cors";
+import bodyParser from "body-parser";
+
+import { registerDynastyRoutes } from "./DynastyServerRoutes.js";
+
+/**
+ * Create and start the dynasty web server
+ */
+export function startDynastyWebServer(state, options = {}) {
+  const app = express();
+
+  const port = options.port || 3000;
+
+  // Middleware
+  app.use(cors());
+  app.use(bodyParser.json({ limit: "10mb" }));
+  app.use(bodyParser.urlencoded({ extended: true }));
+
+  // Register all dynasty routes
+  registerDynastyRoutes(app, state);
+
+  // Root endpoint
+  app.get("/", (req, res) => {
+    res.json({
+      status: "UMKC Dynasty API Online",
+      version: "v1.0",
+      endpoints: [
+        "/api/dynasty/export",
+        "/api/dynasty/import",
+        "/api/dynasty/seasons",
+        "/api/dynasty/history",
+        "/api/dynasty/dashboard",
+        "/api/dynasty/meta"
+      ]
+    });
+  });
+
+  // Start server
+  app.listen(port, () => {
+    console.log(`UMKC Dynasty Web Server running on port ${port}`);
+  });
+
+  return app;
+}
+
+src/client/DynastyClientSDK.js
+// src/client/DynastyClientSDK.js
+
+/**
+ * Dynasty Client SDK v1.0
+ * -----------------------
+ * Provides a clean front-end interface for calling the UMKC Dynasty API.
+ *
+ * Endpoints supported:
+ *   - GET /api/dynasty/export
+ *   - POST /api/dynasty/import
+ *   - GET /api/dynasty/seasons
+ *   - GET /api/dynasty/history
+ *   - GET /api/dynasty/dashboard
+ *   - GET /api/dynasty/meta
+ *
+ * This file does NOT simulate football. It provides API access.
+ */
+
+export class DynastyClientSDK {
+  constructor(baseUrl = "http://localhost:3000") {
+    this.baseUrl = baseUrl;
+  }
+
+  /**
+   * Internal helper for GET requests
+   */
+  async _get(path) {
+    const res = await fetch(`${this.baseUrl}${path}`);
+    if (!res.ok) throw new Error(`GET ${path} failed: ${res.statusText}`);
+    return res.json();
+  }
+
+  /**
+   * Internal helper for POST requests
+   */
+  async _post(path, body) {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if (!res.ok) throw new Error(`POST ${path} failed: ${res.statusText}`);
+    return res.json();
+  }
+
+  /**
+   * GET /api/dynasty/export
+   * Returns full dynasty export object
+   */
+  async getDynastyExport() {
+    return this._get("/api/dynasty/export");
+  }
+
+  /**
+   * POST /api/dynasty/import
+   * Loads a dynasty export file into the server
+   */
+  async importDynasty(exportObj) {
+    return this._post("/api/dynasty/import", exportObj);
+  }
+
+  /**
+   * GET /api/dynasty/seasons
+   * Returns all yearbooks (season summaries)
+   */
+  async getSeasons() {
+    return this._get("/api/dynasty/seasons");
+  }
+
+  /**
+   * GET /api/dynasty/history
+   * Returns full program history
+   */
+  async getProgramHistory() {
+    return this._get("/api/dynasty/history");
+  }
+
+  /**
+   * GET /api/dynasty/dashboard
+   * Returns UI-ready dashboard data
+   */
+  async getDashboard() {
+    return this._get("/api/dynasty/dashboard");
+  }
+
+  /**
+   * GET /api/dynasty/meta
+   * Returns program metadata
+   */
+  async getMetadata() {
+    return this._get("/api/dynasty/meta");
+  }
+}
+
+src/client/ui/DynastyUIComponents.js
+// src/client/ui/DynastyUIComponents.js
+
+/**
+ * Dynasty UI Components v1.0
+ * --------------------------
+ * React-ready components for:
+ *   - Season Cards
+ *   - Rivalry Cards
+ *   - Prestige Graph
+ *   - Attendance Graph
+ *   - Recruiting Pipeline Chart
+ *   - Coach Career Summary
+ *   - Dynasty Timeline
+ *
+ * These components do NOT simulate football. They render dynasty data.
+ */
+
+import React from "react";
+
+/**
+ * Season Card Component
+ */
+export function SeasonCard({ card }) {
+  return (
+    <div className="season-card">
+      <h2>{card.year} Season</h2>
+      <p><strong>Record:</strong> {card.record}</p>
+      <p><strong>Headline:</strong> {card.headline}</p>
+      <p><strong>Prestige Change:</strong> {card.prestigeChange}</p>
+      <p><strong>Attendance Avg:</strong> {card.attendanceAvg}</p>
+
+      <h4>Key Moments</h4>
+      <ul>
+        {card.keyMoments.map((m, idx) => (
+          <li key={idx}>{m.headline}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Rivalry Card Component
+ */
+export function RivalryCard({ card }) {
+  return (
+    <div className="rivalry-card">
+      <h2>Rivalry: {card.opponent}</h2>
+      <p><strong>Total Meetings:</strong> {card.totalMeetings}</p>
+      <p><strong>Wins:</strong> {card.wins}</p>
+      <p><strong>Losses:</strong> {card.losses}</p>
+      <p><strong>Recent Headline:</strong> {card.recentHeadline}</p>
+
+      <h4>History</h4>
+      <ul>
+        {card.history.map((h, idx) => (
+          <li key={idx}>
+            {h.year} Week {h.week}: {h.result} ({h.score})
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Prestige Graph Component
+ */
+export function PrestigeGraph({ data }) {
+  return (
+    <div className="prestige-graph">
+      <h2>Prestige Growth</h2>
+      <ul>
+        {data.map((p, idx) => (
+          <li key={idx}>
+            {p.year}: {p.prestigeChange} (Record: {p.record})
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Attendance Graph Component
+ */
+export function AttendanceGraph({ data }) {
+  return (
+    <div className="attendance-graph">
+      <h2>Attendance Trend</h2>
+      <ul>
+        {data.map((a, idx) => (
+          <li key={idx}>
+            {a.year}: {a.attendanceAvg} avg
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Recruiting Pipeline Chart Component
+ */
+export function RecruitingPipelineChart({ data }) {
+  return (
+    <div className="recruiting-pipeline-chart">
+      <h2>Recruiting Pipeline</h2>
+      <ul>
+        {data.map((entry, idx) => (
+          <li key={idx}>
+            {entry.region}: {entry.count} recruits
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Coach Career Summary Component
+ */
+export function CoachCareerSummary({ summary }) {
+  return (
+    <div className="coach-career-summary">
+      <h2>Coach {summary.headCoach}</h2>
+      <p><strong>Seasons:</strong> {summary.seasons}</p>
+      <p><strong>Career Record:</strong> {summary.careerRecord}</p>
+
+      <h4>Narrative</h4>
+      <ul>
+        {summary.narrative.map((line, idx) => (
+          <li key={idx}>{line}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Dynasty Timeline Component
+ */
+export function DynastyTimeline({ timeline }) {
+  return (
+    <div className="dynasty-timeline">
+      <h2>Dynasty Timeline</h2>
+      <ul>
+        {timeline.map((t, idx) => (
+          <li key={idx}>
+            {t.year}: {t.record} — {t.headline} (Prestige: {t.prestigeChange})
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+src/client/ui/DynastyUIStyles.css
+/* ============================================
+   UMKC Dynasty UI Styles v1.0
+   Clean, modern, modular styles for dashboard
+   ============================================ */
+
+/* Global Layout */
+body {
+  font-family: "Inter", Arial, sans-serif;
+  background: #f5f7fa;
+  color: #222;
+  margin: 0;
+  padding: 0;
+}
+
+h1, h2, h3, h4 {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+ul {
+  padding-left: 1.2rem;
+}
+
+/* Card Base */
+.season-card,
+.rivalry-card,
+.prestige-graph,
+.attendance-graph,
+.recruiting-pipeline-chart,
+.coach-career-summary,
+.dynasty-timeline {
+  background: #ffffff;
+  border-radius: 10px;
+  padding: 1.5rem;
+  margin: 1rem 0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+  border: 1px solid #e3e6ea;
+}
+
+/* Headings */
+.season-card h2,
+.rivalry-card h2,
+.prestige-graph h2,
+.attendance-graph h2,
+.recruiting-pipeline-chart h2,
+.coach-career-summary h2,
+.dynasty-timeline h2 {
+  color: #0057b8; /* UMKC Blue */
+  margin-top: 0;
+}
+
+/* Season Card */
+.season-card p {
+  margin: 0.3rem 0;
+}
+
+.season-card ul li {
+  margin-bottom: 0.3rem;
+}
+
+/* Rivalry Card */
+.rivalry-card ul li {
+  margin-bottom: 0.3rem;
+}
+
+/* Graph Lists */
+.prestige-graph ul li,
+.attendance-graph ul li {
+  margin-bottom: 0.25rem;
+  font-size: 0.95rem;
+}
+
+/* Recruiting Pipeline */
+.recruiting-pipeline-chart ul li {
+  margin-bottom: 0.25rem;
+  font-weight: 500;
+}
+
+/* Coach Career Summary */
+.coach-career-summary ul li {
+  margin-bottom: 0.4rem;
+  line-height: 1.3;
+}
+
+/* Dynasty Timeline */
+.dynasty-timeline ul li {
+  margin-bottom: 0.4rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid #e3e6ea;
+}
+
+.dynasty-timeline ul li:last-child {
+  border-bottom: none;
+}
+
+/* Hover Effects */
+.season-card:hover,
+.rivalry-card:hover,
+.prestige-graph:hover,
+.attendance-graph:hover,
+.recruiting-pipeline-chart:hover,
+.coach-career-summary:hover,
+.dynasty-timeline:hover {
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  transition: box-shadow 0.2s ease;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .season-card,
+  .rivalry-card,
+  .prestige-graph,
+  .attendance-graph,
+  .recruiting-pipeline-chart,
+  .coach-career-summary,
+  .dynasty-timeline {
+    padding: 1rem;
+  }
+}
+
+src/client/ui/DynastyDashboardPage.jsx
+// src/client/ui/DynastyDashboardPage.jsx
+
+/**
+ * Dynasty Dashboard Page v1.0
+ * ---------------------------
+ * Full React page that:
+ *   - fetches dynasty dashboard data via DynastyClientSDK
+ *   - renders all UI components
+ *   - applies DynastyUIStyles.css
+ *
+ * This file does NOT simulate football. It renders dynasty data.
+ */
+
+import React, { useEffect, useState } from "react";
+import { DynastyClientSDK } from "../DynastyClientSDK.js";
+
+import {
+  SeasonCard,
+  RivalryCard,
+  PrestigeGraph,
+  AttendanceGraph,
+  RecruitingPipelineChart,
+  CoachCareerSummary,
+  DynastyTimeline
+} from "./DynastyUIComponents.js";
+
+import "./DynastyUIStyles.css";
+
+export default function DynastyDashboardPage() {
+  const sdk = new DynastyClientSDK("http://localhost:3000");
+
+  const [dashboard, setDashboard] = useState(null);
+  const [metadata, setMetadata] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Fetch dashboard + metadata on mount
+  useEffect(() => {
+    async function load() {
+      try {
+        const meta = await sdk.getMetadata();
+        const dash = await sdk.getDashboard();
+
+        setMetadata(meta);
+        setDashboard(dash);
+        setLoading(false);
+      } catch (err) {
+        setError(err.message);
+        setLoading(false);
+      }
+    }
+
+    load();
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center" }}>
+        <h2>Loading UMKC Dynasty Dashboard…</h2>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center", color: "red" }}>
+        <h2>Error loading dashboard</h2>
+        <p>{error}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: "2rem", maxWidth: "900px", margin: "0 auto" }}>
+      {/* Header */}
+      <header style={{ marginBottom: "2rem", textAlign: "center" }}>
+        <h1>{metadata.programName} Dynasty Dashboard</h1>
+        <p>
+          Head Coach: <strong>{metadata.headCoach}</strong>
+        </p>
+        <p>
+          Seasons Completed: <strong>{metadata.totalSeasons}</strong>
+        </p>
+      </header>
+
+      {/* Season Cards */}
+      <section>
+        <h2>Season Summaries</h2>
+        {dashboard.seasonCards.map((card, idx) => (
+          <SeasonCard key={idx} card={card} />
+        ))}
+      </section>
+
+      {/* Rivalries */}
+      <section>
+        <h2>Rivalries</h2>
+        {dashboard.rivalryCards.map((card, idx) => (
+          <RivalryCard key={idx} card={card} />
+        ))}
+      </section>
+
+      {/* Prestige Graph */}
+      <section>
+        <PrestigeGraph data={dashboard.prestigeGraph} />
+      </section>
+
+      {/* Attendance Graph */}
+      <section>
+        <AttendanceGraph data={dashboard.attendanceGraph} />
+      </section>
+
+      {/* Recruiting Pipeline */}
+      <section>
+        <RecruitingPipelineChart data={dashboard.recruitingPipeline} />
+      </section>
+
+      {/* Coach Career */}
+      <section>
+        <CoachCareerSummary summary={dashboard.coachCareer} />
+      </section>
+
+      {/* Dynasty Timeline */}
+      <section>
+        <DynastyTimeline timeline={dashboard.dynastyTimeline} />
+      </section>
+    </div>
+  );
+}
+
+src/client/ui/DynastyHomePage.jsx
+// src/client/ui/DynastyHomePage.jsx
+
+/**
+ * Dynasty Home Page v1.0
+ * -----------------------
+ * The landing page for the UMKC Football Dynasty web app.
+ * Introduces the program, shows branding, and links to dashboard + history.
+ *
+ * This file does NOT simulate football. It renders identity + navigation.
+ */
+
+import React, { useEffect, useState } from "react";
+import { DynastyClientSDK } from "../DynastyClientSDK.js";
+import "./DynastyUIStyles.css";
+
+export default function DynastyHomePage() {
+  const sdk = new DynastyClientSDK("http://localhost:3000");
+
+  const [metadata, setMetadata] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Fetch program metadata on mount
+  useEffect(() => {
+    async function load() {
+      try {
+        const meta = await sdk.getMetadata();
+        setMetadata(meta);
+        setLoading(false);
+      } catch (err) {
+        setError(err.message);
+        setLoading(false);
+      }
+    }
+
+    load();
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center" }}>
+        <h2>Loading UMKC Football…</h2>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center", color: "red" }}>
+        <h2>Error loading home page</h2>
+        <p>{error}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: "2rem", maxWidth: "900px", margin: "0 auto" }}>
+      {/* Header */}
+      <header style={{ textAlign: "center", marginBottom: "2rem" }}>
+        <img
+          src="/assets/umkc_roos_logo.png"
+          alt="UMKC Roos Football"
+          style={{ width: "160px", marginBottom: "1rem" }}
+        />
+        <h1>{metadata.programName}</h1>
+        <p style={{ fontSize: "1.2rem", marginTop: "0.5rem" }}>
+          <strong>{metadata.headCoach}</strong>, Head Coach
+        </p>
+        <p style={{ marginTop: "0.5rem" }}>
+          Inaugural Season: <strong>{metadata.inauguralYear}</strong>
+        </p>
+      </header>
+
+      {/* Program Identity */}
+      <section className="season-card">
+        <h2>Program Identity</h2>
+        <p><strong>Slogan:</strong> Kansas City’s Team</p>
+        <p><strong>Philosophy:</strong> Development First. Championship Always.</p>
+        <p><strong>Total Seasons Completed:</strong> {metadata.totalSeasons}</p>
+      </section>
+
+      {/* Navigation */}
+      <section className="season-card">
+        <h2>Explore the Dynasty</h2>
+        <ul>
+          <li>
+            <a href="/dashboard" style={{ color: "#0057b8", fontWeight: "600" }}>
+              Dynasty Dashboard
+            </a>
+          </li>
+          <li>
+            <a href="/seasons" style={{ color: "#0057b8", fontWeight: "600" }}>
+              Season Archives
+            </a>
+          </li>
+          <li>
+            <a href="/history" style={{ color: "#0057b8", fontWeight: "600" }}>
+              Program History
+            </a>
+          </li>
+          <li>
+            <a href="/export" style={{ color: "#0057b8", fontWeight: "600" }}>
+              Export Dynasty Data
+            </a>
+          </li>
+        </ul>
+      </section>
+
+      {/* Footer */}
+      <footer style={{ textAlign: "center", marginTop: "3rem", opacity: 0.7 }}>
+        <p>UMKC Football Dynasty System v1.0</p>
+        <p>Built for simulation, storytelling, and legacy.</p>
+      </footer>
+    </div>
+  );
+}
+
+src/client/ui/DynastySeasonsPage.jsx
+// src/client/ui/DynastySeasonsPage.jsx
+
+/**
+ * Dynasty Seasons Page v1.0
+ * -------------------------
+ * Displays all seasons in the dynasty using SeasonCard.
+ *
+ * This file does NOT simulate football. It renders season archives.
+ */
+
+import React, { useEffect, useState } from "react";
+import { DynastyClientSDK } from "../DynastyClientSDK.js";
+
+import { SeasonCard } from "./DynastyUIComponents.js";
+import "./DynastyUIStyles.css";
+
+export default function DynastySeasonsPage() {
+  const sdk = new DynastyClientSDK("http://localhost:3000");
+
+  const [seasons, setSeasons] = useState([]);
+  const [metadata, setMetadata] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Fetch seasons + metadata on mount
+  useEffect(() => {
+    async function load() {
+      try {
+        const meta = await sdk.getMetadata();
+        const seasonList = await sdk.getSeasons();
+
+        setMetadata(meta);
+        setSeasons(seasonList);
+        setLoading(false);
+      } catch (err) {
+        setError(err.message);
+        setLoading(false);
+      }
+    }
+
+    load();
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center" }}>
+        <h2>Loading Season Archives…</h2>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center", color: "red" }}>
+        <h2>Error loading seasons</h2>
+        <p>{error}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: "2rem", maxWidth: "900px", margin: "0 auto" }}>
+      {/* Header */}
+      <header style={{ marginBottom: "2rem", textAlign: "center" }}>
+        <h1>{metadata.programName} Season Archives</h1>
+        <p>
+          Total Seasons Completed: <strong>{metadata.totalSeasons}</strong>
+        </p>
+      </header>
+
+      {/* Season Cards */}
+      <section>
+        {seasons.map((season, idx) => (
+          <SeasonCard key={idx} card={season.seasonCards ? season.seasonCards[0] : {
+            year: season.year,
+            record: season.record,
+            headline: season.seasonNarrative.summary.headline,
+            prestigeChange: season.prestigeChange,
+            attendanceAvg: season.attendanceAvg,
+            keyMoments: season.seasonTimeline.slice(0, 3)
+          }} />
+        ))}
+      </section>
+
+      {/* Footer */}
+      <footer style={{ textAlign: "center", marginTop: "3rem", opacity: 0.7 }}>
+        <p>UMKC Football Dynasty System v1.0</p>
+        <p>Season Archive Browser</p>
+      </footer>
+    </div>
+  );
+}
+
+src/client/ui/DynastyHistoryPage.jsx
+// src/client/ui/DynastyHistoryPage.jsx
+
+/**
+ * Dynasty History Page v1.0
+ * -------------------------
+ * Displays full program history:
+ *   - prestige timeline
+ *   - rivalry history
+ *   - recruiting pipeline
+ *   - milestones
+ *   - coach career arc
+ *
+ * This file does NOT simulate football. It renders historical dynasty data.
+ */
+
+import React, { useEffect, useState } from "react";
+import { DynastyClientSDK } from "../DynastyClientSDK.js";
+
+import {
+  PrestigeGraph,
+  RivalryCard,
+  RecruitingPipelineChart,
+  CoachCareerSummary,
+  DynastyTimeline
+} from "./DynastyUIComponents.js";
+
+import "./DynastyUIStyles.css";
+
+export default function DynastyHistoryPage() {
+  const sdk = new DynastyClientSDK("http://localhost:3000");
+
+  const [history, setHistory] = useState(null);
+  const [metadata, setMetadata] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Fetch program history + metadata on mount
+  useEffect(() => {
+    async function load() {
+      try {
+        const meta = await sdk.getMetadata();
+        const hist = await sdk.getProgramHistory();
+
+        setMetadata(meta);
+        setHistory(hist);
+        setLoading(false);
+      } catch (err) {
+        setError(err.message);
+        setLoading(false);
+      }
+    }
+
+    load();
+  }, []);
+
+  if (loading) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center" }}>
+        <h2>Loading Program History…</h2>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center", color: "red" }}>
+        <h2>Error loading history</h2>
+        <p>{error}</p>
+      </div>
+    );
+  }
+
+  const { prestigeTimeline, rivalryHistory, recruitingPipeline, milestones, coachCareer } = history;
+
+  // Group rivalry history into cards
+  const rivalryGroups = {};
+  rivalryHistory.forEach(r => {
+    if (!rivalryGroups[r.opponent]) rivalryGroups[r.opponent] = [];
+    rivalryGroups[r.opponent].push(r);
+  });
+
+  const rivalryCards = Object.entries(rivalryGroups).map(([opponent, games]) => ({
+    opponent,
+    totalMeetings: games.length,
+    wins: games.filter(g => g.result === "WIN").length,
+    losses: games.filter(g => g.result === "LOSS").length,
+    recentHeadline: games[games.length - 1]?.headline || "No recent game",
+    history: games
+  }));
+
+  return (
+    <div style={{ padding: "2rem", maxWidth: "900px", margin: "0 auto" }}>
+      {/* Header */}
+      <header style={{ textAlign: "center", marginBottom: "2rem" }}>
+        <h1>{metadata.programName} Program History</h1>
+        <p>
+          Head Coach: <strong>{metadata.headCoach}</strong>
+        </p>
+        <p>
+          Seasons Completed: <strong>{metadata.totalSeasons}</strong>
+        </p>
+      </header>
+
+      {/* Prestige Timeline */}
+      <section>
+        <PrestigeGraph data={prestigeTimeline} />
+      </section>
+
+      {/* Rivalries */}
+      <section>
+        <h2>Rivalry History</h2>
+        {rivalryCards.map((card, idx) => (
+          <RivalryCard key={idx} card={card} />
+        ))}
+      </section>
+
+      {/* Recruiting Pipeline */}
+      <section>
+        <RecruitingPipelineChart data={recruitingPipeline.map(entry => {
+          const region = entry.split(" ").slice(-1)[0];
+          const count = parseInt(entry.match(/\d+/)?.[0] || 0);
+          return { region, count };
+        })} />
+      </section>
+
+      {/* Milestones */}
+      <section className="season-card">
+        <h2>Program Milestones</h2>
+        <ul>
+          {milestones.map((m, idx) => (
+            <li key={idx}>
+              <strong>{m.year}</strong>: {m.detail}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Coach Career */}
+      <section>
+        <CoachCareerSummary summary={{
+          headCoach: metadata.headCoach,
+          seasons: metadata.totalSeasons,
+          careerRecord: coachCareer[0] || "",
+          careerNarrative: coachCareer
+        }} />
+      </section>
+
+      {/* Dynasty Timeline */}
+      <section>
+        <DynastyTimeline timeline={history.seasons.map(s => ({
+          year: s.year,
+          record: s.record,
+          headline: s.seasonNarrative.summary.headline,
+          prestigeChange: s.prestigeChange
+        }))} />
+      </section>
+
+      {/* Footer */}
+      <footer style={{ textAlign: "center", marginTop: "3rem", opacity: 0.7 }}>
+        <p>UMKC Football Dynasty System v1.0</p>
+        <p>Program History Archive</p>
+      </footer>
+    </div>
+  );
+}
+
+src/client/ui/SeasonDetailPage.jsx
+// src/client/ui/SeasonDetailPage.jsx
+
+/**
+ * Season Detail Page v1.0
+ * -----------------------
+ * Displays full details for a single season:
+ *   - weekly narratives
+ *   - season narrative
+ *   - offseason narrative
+ *   - stats + awards
+ *   - recruiting class
+ *   - portal moves
+ *   - staff changes
+ *   - culture tags
+ *
+ * This file does NOT simulate football. It renders season details.
+ */
+
+import React, { useEffect, useState } from "react";
+import { DynastyClientSDK } from "../DynastyClientSDK.js";
+
+import {
+  SeasonCard,
+  PrestigeGraph,
+  AttendanceGraph,
+  RecruitingPipelineChart
+} from "./DynastyUIComponents.js";
+
+import "./DynastyUIStyles.css";
+
+export default function SeasonDetailPage({ year }) {
+  const sdk = new DynastyClientSDK("http://localhost:3000");
+
+  const [season, setSeason] = useState(null);
+  const [metadata, setMetadata] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Fetch season + metadata on mount
+  useEffect(() => {
+    async function load() {
+      try {
+        const meta = await sdk.getMetadata();
+        const seasons = await sdk.getSeasons();
+
+        const found = seasons.find(s => s.year === year);
+
+        if (!found) {
+          throw new Error(`Season ${year} not found.`);
+        }
+
+        setMetadata(meta);
+        setSeason(found);
+        setLoading(false);
+      } catch (err) {
+        setError(err.message);
+        setLoading(false);
+      }
+    }
+
+    load();
+  }, [year]);
+
+  if (loading) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center" }}>
+        <h2>Loading Season {year}…</h2>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: "2rem", textAlign: "center", color: "red" }}>
+        <h2>Error loading season</h2>
+        <p>{error}</p>
+      </div>
+    );
+  }
+
+  const {
+    record,
+    weeklyNarratives,
+    seasonNarrative,
+    offseasonNarrative,
+    statisticalLeaders,
+    awards,
+    recruitingClass,
+    portalMoves,
+    staffChanges,
+    cultureTags,
+    attendanceAvg,
+    prestigeChange,
+    seasonTimeline
+  } = season;
+
+  return (
+    <div style={{ padding: "2rem", maxWidth: "900px", margin: "0 auto" }}>
+      {/* Header */}
+      <header style={{ textAlign: "center", marginBottom: "2rem" }}>
+        <h1>{metadata.programName} — {year} Season</h1>
+        <p><strong>Record:</strong> {record}</p>
+        <p><strong>Prestige Change:</strong> {prestigeChange}</p>
+        <p><strong>Attendance Avg:</strong> {attendanceAvg}</p>
+      </header>
+
+      {/* Season Summary Card */}
+      <section>
+        <SeasonCard
+          card={{
+            year,
+            record,
+            headline: seasonNarrative.summary.headline,
+            prestigeChange,
+            attendanceAvg,
+            keyMoments: seasonTimeline.slice(0, 3)
+          }}
+        />
+      </section>
+
+      {/* Weekly Narratives */}
+      <section className="season-card">
+        <h2>Weekly Narratives</h2>
+        <ul>
+          {weeklyNarratives.map((w, idx) => (
+            <li key={idx}>
+              <strong>Week {w.week} vs {w.opponent}</strong> — {w.result} ({w.score})  
+              <br />
+              {w.summary.headline}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Season Narrative */}
+      <section className="season-card">
+        <h2>Season Narrative</h2>
+        <p>{seasonNarrative.fullText}</p>
+      </section>
+
+      {/* Offseason Narrative */}
+      <section className="season-card">
+        <h2>Offseason Narrative</h2>
+        <p>{offseasonNarrative.fullText}</p>
+      </section>
+
+      {/* Statistical Leaders */}
+      <section className="season-card">
+        <h2>Statistical Leaders</h2>
+        <ul>
+          {Object.entries(statisticalLeaders).map(([key, value], idx) => (
+            <li key={idx}>
+              <strong>{key.replace("Leader", "")}:</strong> {value?.name || "N/A"}  
+              {value && ` — ${value.stat}`}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Awards */}
+      <section className="season-card">
+        <h2>Awards</h2>
+        <h4>Team Awards</h4>
+        <ul>
+          {awards.teamAwards.map((a, idx) => (
+            <li key={idx}>{a}</li>
+          ))}
+        </ul>
+
+        <h4>Player Awards</h4>
+        <ul>
+          {awards.playerAwards.map((a, idx) => (
+            <li key={idx}>{a}</li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Recruiting Class */}
+      <section className="season-card">
+        <h2>Recruiting Class</h2>
+        <ul>
+          {recruitingClass.map((r, idx) => (
+            <li key={idx}>
+              {r.name} — {r.position}, {r.stars}★ ({r.hometown})
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Portal Moves */}
+      <section className="season-card">
+        <h2>Portal Moves</h2>
+        <ul>
+          {portalMoves.map((p, idx) => (
+            <li key={idx}>
+              {p.type === "IN" ? "Added" : "Lost"} {p.name} ({p.position})  
+              {p.from && ` from ${p.from}`}  
+              {p.to && ` to ${p.to}`}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Staff Changes */}
+      <section className="season-card">
+        <h2>Staff Changes</h2>
+        <ul>
+          {staffChanges.map((s, idx) => (
+            <li key={idx}>{s}</li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Culture Tags */}
+      <section className="season-card">
+        <h2>Culture Tags</h2>
+        <ul>
+          {cultureTags.map((tag, idx) => (
+            <li key={idx}>{tag}</li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Footer */}
+      <footer style={{ textAlign: "center", marginTop: "3rem", opacity: 0.7 }}>
+        <p>UMKC Football Dynasty System v1.0</p>
+        <p>Season Detail Archive</p>
+      </footer>
+    </div>
+  );
+}
+
+src/client/ui/DynastyAppRouter.jsx
+// src/client/ui/DynastyAppRouter.jsx
+
+/**
+ * Dynasty App Router v1.0
+ * -----------------------
+ * Connects all dynasty pages into a single React application:
+ *   - Home Page
+ *   - Dashboard Page
+ *   - Seasons Page
+ *   - History Page
+ *   - Season Detail Page (dynamic)
+ *
+ * This file does NOT simulate football. It provides navigation.
+ */
+
+import React from "react";
+import {
+  BrowserRouter as Router,
+  Routes,
+  Route
+} from "react-router-dom";
+
+import DynastyHomePage from "./DynastyHomePage.jsx";
+import DynastyDashboardPage from "./DynastyDashboardPage.jsx";
+import DynastySeasonsPage from "./DynastySeasonsPage.jsx";
+import DynastyHistoryPage from "./DynastyHistoryPage.jsx";
+import SeasonDetailPage from "./SeasonDetailPage.jsx";
+
+export default function DynastyAppRouter() {
+  return (
+    <Router>
+      <Routes>
+        {/* Home */}
+        <Route path="/" element={<DynastyHomePage />} />
+
+        {/* Dashboard */}
+        <Route path="/dashboard" element={<DynastyDashboardPage />} />
+
+        {/* Seasons */}
+        <Route path="/seasons" element={<DynastySeasonsPage />} />
+
+        {/* Program History */}
+        <Route path="/history" element={<DynastyHistoryPage />} />
+
+        {/* Season Detail (dynamic) */}
+        <Route
+          path="/season/:year"
+          element={
+            <SeasonDetailWrapper />
+          }
+        />
+      </Routes>
+    </Router>
+  );
+}
+
+/**
+ * Wrapper to extract :year param and pass it to SeasonDetailPage
+ */
+function SeasonDetailWrapper() {
+  const { year } = useParams();
+  return <SeasonDetailPage year={parseInt(year)} />;
+}
+
+src/client/ui/DynastyApp.jsx
+// src/client/ui/DynastyApp.jsx
+
+/**
+ * Dynasty App v1.0
+ * -----------------
+ * Top-level React application shell.
+ * Wraps the router, loads global styles, and provides the app container.
+ *
+ * This file does NOT simulate football. It initializes the UI.
+ */
+
+import React from "react";
+import DynastyAppRouter from "./DynastyAppRouter.jsx";
+import "./DynastyUIStyles.css";
+
+export default function DynastyApp() {
+  return (
+    <div className="dynasty-app-container">
+      <DynastyAppRouter />
+    </div>
+  );
+}
+
+src/client/index.jsx
+// src/client/index.jsx
+
+/**
+ * index.jsx v1.0
+ * ---------------
+ * React entry point for the UMKC Football Dynasty web application.
+ *
+ * This file does NOT simulate football. It mounts the UI.
+ */
+
+import React from "react";
+import { createRoot } from "react-dom/client";
+import DynastyApp from "./ui/DynastyApp.jsx";
+
+// Find the root DOM node
+const rootElement = document.getElementById("root");
+
+// Create React root
+const root = createRoot(rootElement);
+
+// Mount the app
+root.render(
+  <React.StrictMode>
+    <DynastyApp />
+  </React.StrictMode>
+);
+
+DynastyBuildConfig.js
+// DynastyBuildConfig.js v1.0
+// Clean Vite configuration for the UMKC Football Dynasty Web App
+
+import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+import path from "path";
+
+export default defineConfig({
+  plugins: [react()],
+
+  resolve: {
+    alias: {
+      "@client": path.resolve(__dirname, "src/client"),
+      "@ui": path.resolve(__dirname, "src/client/ui"),
+      "@sdk": path.resolve(__dirname, "src/client/DynastyClientSDK.js"),
+      "@server": path.resolve(__dirname, "src/server"),
+      "@engine": path.resolve(__dirname, "src/engine"),
+    }
+  },
+
+  server: {
+    port: 5173,
+    open: true,
+    strictPort: true,
+  },
+
+  build: {
+    outDir: "dist",
+    sourcemap: true,
+    minify: "esbuild",
+    target: "esnext",
+    cssCodeSplit: true,
+  }
+});
+
+DynastyDevInstructions.md
+
+
+src/app/autosave.js
+// src/app/autosave.js
+
+import { saveState } from "./stateSave.js";
+
+/**
+ * Start an autosave loop that saves the state every intervalMs.
+ * Default interval: 120000 ms (2 minutes)
+ */
+export function startAutosave(saveKey, state, intervalMs = 120000) {
+  try {
+    setInterval(() => {
+      saveState(saveKey, state);
+    }, intervalMs);
+  } catch (err) {
+    console.warn("[v8] Autosave failed to start:", err);
+  }
+}
+
+src/app/router.js
+// src/app/router.js
+
+import { V8_TABS } from "./tabsConfig.js";
+
+// --- View Imports ---
+import { renderDashboard } from "../ui/views/dashboardView.js";
+import { renderSchedule } from "../ui/views/scheduleView.js";
+import { renderRoster } from "../ui/views/rosterView.js";
+import { renderStadium } from "../ui/views/stadiumView.js";
+
+// Placeholder imports for future views
+// (You will add these as you build each view)
+import { renderTrainingCamp } from "../ui/views/campView.js";
+import { renderGameDay } from "../ui/views/gamedayView.js";
+import { renderRecruiting } from "../ui/views/recruitingView.js";
+import { renderNil } from "../ui/views/nilView.js";
+import { renderRivalries } from "../ui/views/rivalriesView.js";
+import { renderStaff } from "../ui/views/staffView.js";
+import { renderBroadcast } from "../ui/views/broadcastView.js";
+
+/**
+ * Map tab IDs to view renderers.
+ * This is the heart of the v8.0 routing system.
+ */
+const VIEW_MAP = {
+  dashboard: renderDashboard,
+  camp: renderTrainingCamp,
+  roster: renderRoster,
+  schedule: renderSchedule,
+  gameday: renderGameDay,
+  recruiting: renderRecruiting,
+  nil: renderNil,
+  rivalries: renderRivalries,
+  staff: renderStaff,
+  broadcast: renderBroadcast,
+  stadium: renderStadium
+};
+
+/**
+ * Set the active tab and re-render the current view.
+ */
+export function setTab(tabId, state) {
+  // Validate tab
+  const exists = V8_TABS.some(t => t.id === tabId);
+  if (!exists) {
+    console.warn(`[v8] Unknown tab: ${tabId}`);
+    return;
+  }
+
+  // Phase guard: cannot enter Game Day during Training Camp
+  if (state.currentPhase === "TRAINING_CAMP" && tabId === "gameday") {
+    tabId = "camp"; // Force redirect
+  }
+
+  state.currentTab = tabId;
+  renderCurrentView(state);
+
+  // Update active tab styling
+  document.querySelectorAll(".roo-nav__tab").forEach(el => {
+    el.classList.toggle("active", el.dataset.tab === tabId);
+  });
+}
+
+/**
+ * Render the view for the current tab.
+ */
+export function renderCurrentView(state) {
+  const el = document.getElementById("app-view");
+  if (!el) return;
+
+  const renderer = VIEW_MAP[state.currentTab];
+
+  if (!renderer) {
+    el.innerHTML = `<div>View not implemented: ${state.currentTab}</div>`;
+    return;
+  }
+
+  el.innerHTML = renderer(state);
+}
+
+src/app/tabsConfig.js
+// src/app/tabsConfig.js
+
+/**
+ * v8.0 Tab Configuration
+ * Each tab has:
+ * - id: unique identifier
+ * - label: text shown in the nav bar
+ * - icon: emoji icon for quick visual recognition
+ */
+
+export const V8_TABS = [
+  { id: "dashboard",   label: "Dashboard",     icon: "🏠" },
+  { id: "camp",        label: "Training Camp", icon: "⛺" },
+  { id: "roster",      label: "Roster",        icon: "👥" },
+  { id: "schedule",    label: "Schedule",      icon: "📅" },
+  { id: "gameday",     label: "Game Day",      icon: "🏈" },
+  { id: "recruiting",  label: "Recruiting",    icon: "📋" },
+  { id: "nil",         label: "NIL / Roo 816", icon: "💰" },
+  { id: "rivalries",   label: "Rivalries",     icon: "🔥" },
+  { id: "staff",       label: "Staff",         icon: "🎓" },
+  { id: "broadcast",   label: "Broadcast",     icon: "📻" },
+  { id: "stadium",     label: "Stadium",       icon: "🏟️" }
+];
+
+src/app/header.js
+// src/app/header.js
+
+/**
+ * Render the UMKC Dynasty v8.0 header.
+ * Displays program identity, current year, and current phase.
+ */
+export function renderHeader(state) {
+  const el = document.getElementById("app-header");
+  if (!el) return;
+
+  el.innerHTML = `
+    <div class="roo-header">
+      <div class="roo-header__logo">
+        🦘 <span>UMKC</span> DYNASTY
+      </div>
+
+      <div class="roo-header__meta">
+        <div class="roo-header__season">
+          ${state.currentYear} Season
+        </div>
+
+        <div class="roo-header__phase">
+          ${state.currentPhase === "TRAINING_CAMP"
+            ? "⛺ Training Camp"
+            : "Week " + state.currentWeek}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+src/app/nav.js
+// src/app/nav.js
+
+import { V8_TABS } from "./tabsConfig.js";
+import { setTab } from "./router.js";
+
+/**
+ * Render the navigation bar into #app-nav.
+ * Each tab triggers setTab() and re-renders the current view.
+ */
+export function renderNav(state) {
+  const el = document.getElementById("app-nav");
+  if (!el) return;
+
+  el.innerHTML = `
+    <nav class="roo-nav">
+      ${V8_TABS.map(tab => `
+        <div 
+          class="roo-nav__tab ${tab.id === state.currentTab ? "active" : ""}"
+          data-tab="${tab.id}"
+        >
+          ${tab.icon} ${tab.label}
+        </div>
+      `).join("")}
+    </nav>
+  `;
+
+  // Attach click handlers
+  document.querySelectorAll(".roo-nav__tab").forEach(tabEl => {
+    tabEl.addEventListener("click", () => {
+      const tabId = tabEl.dataset.tab;
+      setTab(tabId, state);
+    });
+  });
+}
+
+
+// src/ui/views/dashboardView.js
+
+export function renderDashboard(state) {
+  return `
+    <div class="view-dashboard">
+
+      <!-- SECTION: Season Summary -->
+      <section class="dash-section">
+        <h2>Season Overview</h2>
+        <div class="dash-card">
+          <div><strong>Year:</strong> ${state.currentYear}</div>
+          <div><strong>Phase:</strong> ${state.currentPhase}</div>
+          <div><strong>Week:</strong> ${state.currentWeek}</div>
+        </div>
+      </section>
+
+      <!-- SECTION: Next Game -->
+      <section class="dash-section">
+        <h2>Next Game</h2>
+        ${renderNextGame(state)}
+      </section>
+
+      <!-- SECTION: Recruiting Snapshot -->
+      <section class="dash-section">
+        <h2>Recruiting Snapshot</h2>
+        ${renderRecruitingSnapshot(state)}
+      </section>
+
+      <!-- SECTION: NIL Snapshot -->
+      <section class="dash-section">
+        <h2>NIL / Roo 816 Snapshot</h2>
+        ${renderNilSnapshot(state)}
+      </section>
+
+      <!-- SECTION: Stadium Snapshot -->
+      <section class="dash-section">
+        <h2>Stadium & Facilities</h2>
+        ${renderStadiumSnapshot(state)}
+      </section>
+
+      <!-- SECTION: Culture Metrics -->
+      <section class="dash-section">
+        <h2>Team Culture</h2>
+        ${renderCultureSnapshot(state)}
+      </section>
+
+    </div>
+  `;
+}
+
+/* -----------------------------
+   SUBCOMPONENTS
+------------------------------*/
+
+function renderNextGame(state) {
+  const next = state.schedule.find(g => !g.result);
+
+  if (!next) {
+    return `<div class="dash-card">No remaining games.</div>`;
+  }
+
+  return `
+    <div class="dash-card">
+      <div><strong>Opponent:</strong> ${next.opponent}</div>
+      <div><strong>Location:</strong> ${next.location}</div>
+      <div><strong>Date:</strong> ${next.date}</div>
+    </div>
+  `;
+}
+
+function renderRecruitingSnapshot(state) {
+  const board = state.recruiting.currentBoard.slice(0, 5);
+
+  if (board.length === 0) {
+    return `<div class="dash-card">No prospects on the board.</div>`;
+  }
+
+  return `
+    <div class="dash-card">
+      <ul>
+        ${board
+          .map(
+            p => `
+          <li>
+            ${p.name} — ${p.pos}, ${p.stars}★ (${p.homeState})
+          </li>
+        `
+          )
+          .join("")}
+      </ul>
+    </div>
+  `;
+}
+
+function renderNilSnapshot(state) {
+  const deals = state.nil.deals.length;
+  const donors = state.nil.donors.length;
+
+  return `
+    <div class="dash-card">
+      <div><strong>NIL Deals:</strong> ${deals}</div>
+      <div><strong>Donors:</strong> ${donors}</div>
+    </div>
+  `;
+}
+
+function renderStadiumSnapshot(state) {
+  return `
+    <div class="dash-card">
+      <div><strong>Name:</strong> ${state.stadium.name}</div>
+      <div><strong>Capacity:</strong> ${state.stadium.capacity}</div>
+      <div><strong>Surface:</strong> ${state.stadium.surface}</div>
+    </div>
+  `;
+}
+
+function renderCultureSnapshot(state) {
+  return `
+    <div class="dash-card">
+      <div><strong>Cohesion:</strong> ${state.culture.cohesion}</div>
+      <div><strong>Morale:</strong> ${state.culture.morale}</div>
+      <div><strong>Prestige:</strong> ${state.culture.prestige}</div>
+    </div>
+  `;
+}
+
+// src/ui/views/scheduleView.js
+
+export function renderSchedule(state) {
+  const games = state.schedule;
+
+  return `
+    <div class="view-schedule">
+      <h2>2024 Schedule</h2>
+
+      <table class="schedule-table">
+        <thead>
+          <tr>
+            <th>Week</th>
+            <th>Opponent</th>
+            <th>Location</th>
+            <th>Date</th>
+            <th>Broadcast</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          ${games.map(g => renderGameRow(g)).join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+/* -----------------------------
+   SUBCOMPONENTS
+------------------------------*/
+
+function renderGameRow(g) {
+  const isBye = g.result === "BYE";
+  const played = g.result && g.result !== "BYE";
+
+  const opponent = g.isRivalry
+    ? `🔥 ${g.opponent} <span class="rivalry-tag">(${g.isRivalryName})</span>`
+    : g.opponent;
+
+  const location = g.location === "HOME"
+    ? `Home — Durwood Stadium`
+    : `Away — ${g.city}, ${g.state}`;
+
+  const broadcast = g.televised
+    ? `📺 ${g.broadcast || ""}`
+    : "";
+
+  const result = isBye
+    ? `<span class="result-badge bye">BYE</span>`
+    : played
+    ? `<span class="result-badge ${g.result === "W" ? "win" : "loss"}">
+         ${g.result} ${g.score.umkc}-${g.score.opp}
+       </span>`
+    : `<span class="result-badge pending">—</span>`;
+
+  return `
+    <tr class="${g.isRivalry ? "rivalry-row" : ""}">
+      <td>${g.week}</td>
+      <td>${opponent}</td>
+      <td>${location}</td>
+      <td>${g.date}</td>
+      <td>${broadcast}</td>
+      <td>${result}</td>
+    </tr>
+  `;
+}
+
+// src/ui/views/rosterView.js
+
+export function renderRoster(state) {
+  const players = state.players;
+
+  // Group players by position
+  const groups = groupByPosition(players);
+
+  return `
+    <div class="view-roster">
+      <h2>Roster</h2>
+
+      ${Object.keys(groups)
+        .map(pos => renderPositionGroup(pos, groups[pos]))
+        .join("")}
+    </div>
+  `;
+}
+
+/* -----------------------------
+   SUBCOMPONENTS
+------------------------------*/
+
+function groupByPosition(players) {
+  const map = {};
+  players.forEach(p => {
+    if (!map[p.pos]) map[p.pos] = [];
+    map[p.pos].push(p);
+  });
+  return map;
+}
+
+function renderPositionGroup(pos, players) {
+  return `
+    <section class="roster-group">
+      <h3>${pos}</h3>
+
+      <table class="roster-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Year</th>
+            <th>HT/WT</th>
+            <th>Hometown</th>
+            <th>Starter</th>
+            <th>Captain</th>
+            <th>OVR</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          ${players.map(p => renderPlayerRow(p)).join("")}
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+function renderPlayerRow(p) {
+  const starter = p.starter
+    ? `<span class="badge starter">Starter</span>`
+    : "";
+
+  const captain = p.captain
+    ? `<span class="badge captain">Captain</span>`
+    : "";
+
+  const notes = p.developmentNotes || "";
+
+  return `
+    <tr>
+      <td>${p.fullName}</td>
+      <td>${formatYear(p.year)}</td>
+      <td>${p.height} / ${p.weight} lb</td>
+      <td>${p.hometown}, ${p.state}</td>
+      <td>${starter}</td>
+      <td>${captain}</td>
+      <td>${p.overall}</td>
+      <td>${notes}</td>
+    </tr>
+  `;
+}
+
+function formatYear(year) {
+  switch (year) {
+    case 1: return "FR";
+    case 2: return "SO";
+    case 3: return "JR";
+    case 4: return "SR";
+    case 5: return "GR";
+    default: return year;
+  }
+}
+
+// src/ui/views/stadiumView.js
+
+export function renderStadium(state) {
+  const st = state.stadium;
+
+  return `
+    <div class="view-stadium">
+      <h2>${st.name}</h2>
+
+      ${renderStadiumMeta(st)}
+      ${renderAmenities(st)}
+      ${renderSections(st)}
+      ${renderHomeFieldAdvantage(state)}
+    </div>
+  `;
+}
+
+/* -----------------------------
+   SUBCOMPONENTS
+------------------------------*/
+
+function renderStadiumMeta(st) {
+  return `
+    <section class="stadium-section">
+      <h3>Stadium Overview</h3>
+      <div class="stadium-card">
+        <div><strong>Capacity:</strong> ${st.capacity}</div>
+        <div><strong>Surface:</strong> ${st.surface}</div>
+        <div><strong>Location:</strong> ${st.city}, ${st.state}</div>
+        <div><strong>Opened:</strong> ${st.opened}</div>
+      </div>
+    </section>
+  `;
+}
+
+function renderAmenities(st) {
+  if (!st.amenities || st.amenities.length === 0) {
+    return `
+      <section class="stadium-section">
+        <h3>Amenities</h3>
+        <div class="stadium-card">No amenities listed.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="stadium-section">
+      <h3>Amenities</h3>
+      <table class="stadium-table">
+        <thead>
+          <tr>
+            <th>Amenity</th>
+            <th>Rating</th>
+            <th>Upgraded</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${st.amenities.map(a => renderAmenityRow(a)).join("")}
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+function renderAmenityRow(a) {
+  return `
+    <tr>
+      <td>${a.name}</td>
+      <td>${a.rating} / ${a.maxRating}</td>
+      <td>${a.upgraded ? "✔" : "—"}</td>
+    </tr>
+  `;
+}
+
+function renderSections(st) {
+  if (!st.sections || st.sections.length === 0) {
+    return `
+      <section class="stadium-section">
+        <h3>Seating Sections</h3>
+        <div class="stadium-card">No sections listed.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="stadium-section">
+      <h3>Seating Sections</h3>
+      <table class="stadium-table">
+        <thead>
+          <tr>
+            <th>Section</th>
+            <th>Capacity</th>
+            <th>Fill Rate</th>
+            <th>Projected Fans</th>
+            <th>Loudness</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${st.sections.map(s => renderSectionRow(s)).join("")}
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+function renderSectionRow(s) {
+  const projected = Math.round(s.capacity * s.fillRate);
+  const loudness = Math.round(s.loudness * 100);
+
+  return `
+    <tr>
+      <td>${s.name}</td>
+      <td>${s.capacity}</td>
+      <td>${Math.round(s.fillRate * 100)}%</td>
+      <td>${projected}</td>
+      <td>${loudness}%</td>
+    </tr>
+  `;
+}
+
+function renderHomeFieldAdvantage(state) {
+  const hfa = state.stadium.hfa || 0;
+
+  return `
+    <section class="stadium-section">
+      <h3>Home Field Advantage</h3>
+      <div class="stadium-card">
+        <div><strong>HFA:</strong> ${hfa.toFixed(1)} pts</div>
+      </div>
+    </section>
+  `;
+}
+
+
+// src/ui/views/campView.js
+
+export function renderTrainingCamp(state) {
+  const camp = state.trainingCamp;
+
+  return `
+    <div class="view-camp">
+      <h2>Training Camp</h2>
+
+      ${renderCampMeta(camp)}
+      ${renderPositionBattles(camp)}
+      ${renderDevelopmentNotes(camp)}
+      ${renderScrimmageResults(camp)}
+    </div>
+  `;
+}
+
+/* -----------------------------
+   SUBCOMPONENTS
+------------------------------*/
+
+function renderCampMeta(camp) {
+  return `
+    <section class="camp-section">
+      <h3>Camp Overview</h3>
+      <div class="camp-card">
+        <div><strong>Week:</strong> ${camp.week}</div>
+        <div><strong>Pads:</strong> ${camp.padsOn ? "Full Pads" : "Shells Only"}</div>
+        <div><strong>Intensity:</strong> ${camp.intensity}</div>
+      </div>
+    </section>
+  `;
+}
+
+function renderPositionBattles(camp) {
+  if (!camp.positionBattles || camp.positionBattles.length === 0) {
+    return `
+      <section class="camp-section">
+        <h3>Position Battles</h3>
+        <div class="camp-card">No active battles.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="camp-section">
+      <h3>Position Battles</h3>
+      <table class="camp-table">
+        <thead>
+          <tr>
+            <th>Position</th>
+            <th>Leader</th>
+            <th>Challenger</th>
+            <th>Gap</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${camp.positionBattles.map(b => renderBattleRow(b)).join("")}
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+function renderBattleRow(b) {
+  return `
+    <tr>
+      <td>${b.position}</td>
+      <td>${b.leader}</td>
+      <td>${b.challenger}</td>
+      <td>${b.gap}</td>
+    </tr>
+  `;
+}
+
+function renderDevelopmentNotes(camp) {
+  if (!camp.developmentNotes || camp.developmentNotes.length === 0) {
+    return `
+      <section class="camp-section">
+        <h3>Development Notes</h3>
+        <div class="camp-card">No notes yet.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="camp-section">
+      <h3>Development Notes</h3>
+      <ul class="camp-list">
+        ${camp.developmentNotes.map(n => `<li>${n}</li>`).join("")}
+      </ul>
+    </section>
+  `;
+}
+
+function renderScrimmageResults(camp) {
+  if (!camp.scrimmageResults || camp.scrimmageResults.length === 0) {
+    return `
+      <section class="camp-section">
+        <h3>Scrimmage Results</h3>
+        <div class="camp-card">No scrimmages recorded.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="camp-section">
+      <h3>Scrimmage Results</h3>
+      <table class="camp-table">
+        <thead>
+          <tr>
+            <th>Offense</th>
+            <th>Defense</th>
+            <th>Summary</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${camp.scrimmageResults.map(r => renderScrimmageRow(r)).join("")}
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+function renderScrimmageRow(r) {
+  return `
+    <tr>
+      <td>${r.offenseScore}</td>
+      <td>${r.defenseScore}</td>
+      <td>${r.summary}</td>
+    </tr>
+  `;
+}
+
+
+// src/ui/views/gamedayView.js
+
+export function renderGameDay(state) {
+  const game = getCurrentGame(state);
+
+  if (!game) {
+    return `
+      <div class="view-gameday">
+        <h2>Game Day</h2>
+        <div class="gameday-card">No game scheduled this week.</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="view-gameday">
+      <h2>Game Day — Week ${game.week}</h2>
+
+      ${renderOpponentPanel(game)}
+      ${renderPregameNotes(game)}
+      ${renderScoringSummary(game)}
+      ${renderDriveChart(game)}
+      ${renderPlayerStats(game)}
+      ${renderPostgameNotes(game)}
+      ${renderBroadcastPanel(state)}
+    </div>
+  `;
+}
+
+/* -----------------------------
+   SUBCOMPONENTS
+------------------------------*/
+
+function getCurrentGame(state) {
+  return state.schedule.find(g => g.week === state.currentWeek);
+}
+
+function renderOpponentPanel(game) {
+  return `
+    <section class="gameday-section">
+      <h3>Opponent</h3>
+      <div class="gameday-card">
+        <div><strong>${game.opponent}</strong></div>
+        <div>${game.location === "HOME" ? "Home — Durwood Stadium" : "Away"}</div>
+        <div>${game.date}</div>
+      </div>
+    </section>
+  `;
+}
+
+function renderPregameNotes(game) {
+  const notes = game.pregameNotes || [];
+
+  if (notes.length === 0) {
+    return `
+      <section class="gameday-section">
+        <h3>Pregame Notes</h3>
+        <div class="gameday-card">No pregame notes.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="gameday-section">
+      <h3>Pregame Notes</h3>
+      <ul class="gameday-list">
+        ${notes.map(n => `<li>${n}</li>`).join("")}
+      </ul>
+    </section>
+  `;
+}
+
+function renderScoringSummary(game) {
+  const scoring = game.scoringSummary || [];
+
+  if (scoring.length === 0) {
+    return `
+      <section class="gameday-section">
+        <h3>Scoring Summary</h3>
+        <div class="gameday-card">No scoring plays recorded.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="gameday-section">
+      <h3>Scoring Summary</h3>
+      <table class="gameday-table">
+        <thead>
+          <tr>
+            <th>Quarter</th>
+            <th>Team</th>
+            <th>Play</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${scoring.map(s => renderScoringRow(s)).join("")}
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+function renderScoringRow(s) {
+  return `
+    <tr>
+      <td>${s.quarter}</td>
+      <td>${s.team}</td>
+      <td>${s.play}</td>
+    </tr>
+  `;
+}
+
+function renderDriveChart(game) {
+  const drives = game.driveChart || [];
+
+  if (drives.length === 0) {
+    return `
+      <section class="gameday-section">
+        <h3>Drive Chart</h3>
+        <div class="gameday-card">No drives recorded.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="gameday-section">
+      <h3>Drive Chart</h3>
+      <table class="gameday-table">
+        <thead>
+          <tr>
+            <th>Drive</th>
+            <th>Result</th>
+            <th>Plays</th>
+            <th>Yards</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${drives.map(d => renderDriveRow(d)).join("")}
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+function renderDriveRow(d) {
+  return `
+    <tr>
+      <td>${d.number}</td>
+      <td>${d.result}</td>
+      <td>${d.plays}</td>
+      <td>${d.yards}</td>
+    </tr>
+  `;
+}
+
+function renderPlayerStats(game) {
+  const stats = game.playerStats || [];
+
+  if (stats.length === 0) {
+    return `
+      <section class="gameday-section">
+        <h3>Player Stats</h3>
+        <div class="gameday-card">No player stats recorded.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="gameday-section">
+      <h3>Player Stats</h3>
+      <table class="gameday-table">
+        <thead>
+          <tr>
+            <th>Player</th>
+            <th>Pos</th>
+            <th>Stat Line</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${stats.map(s => renderPlayerStatRow(s)).join("")}
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+function renderPlayerStatRow(s) {
+  return `
+    <tr>
+      <td>${s.name}</td>
+      <td>${s.pos}</td>
+      <td>${s.line}</td>
+    </tr>
+  `;
+}
+
+function renderPostgameNotes(game) {
+  const notes = game.postgameNotes || [];
+
+  if (notes.length === 0) {
+    return `
+      <section class="gameday-section">
+        <h3>Postgame Notes</h3>
+        <div class="gameday-card">No postgame notes.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="gameday-section">
+      <h3>Postgame Notes</h3>
+      <ul class="gameday-list">
+        ${notes.map(n => `<li>${n}</li>`).join("")}
+      </ul>
+    </section>
+  `;
+}
+
+function renderBroadcastPanel(state) {
+  const entries = state.broadcast.entries || [];
+
+  if (entries.length === 0) {
+    return `
+      <section class="gameday-section">
+        <h3>Broadcast Log</h3>
+        <div class="gameday-card">No broadcast entries.</div>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="gameday-section">
+      <h3>Broadcast Log</h3>
+      <ul class="gameday-list">
+        ${entries.map(e => `<li>${e.message}</li>`).join("")}
+      </ul>
+    </section>
+  `;
+}
+
+
+// src/ui/views/recruitingView.js
+
+export function renderRecruiting(state) {
+  const board = state.recruiting.currentBoard || [];
+
+  return `
+    <div class="view-recruiting">
+      <h2>Recruiting Board</h2>
+
+      ${
+        board.length === 0
+          ? renderEmptyBoard()
+          : renderBoardTable(board)
+      }
+    </div>
+  `;
+}
+
+/* -----------------------------
+   SUBCOMPONENTS
+------------------------------*/
+
+function renderEmptyBoard() {
+  return `
+    <div class="recruiting-card">
+      No prospects on the board.
+    </div>
+  `;
+}
+
+function renderBoardTable(board) {
+  return `
+    <table class="recruiting-table">
+      <thead>
+        <tr>
+          <th>Prospect</th>
+          <th>Pos</th>
+          <th>Stars</th>
+          <th>Home</th>
+          <th>Interest</th>
+          <th>Pipeline</th>
+          <th>Pitches</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${board.map(p => renderProspectRow(p)).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderProspectRow(p) {
+  return `
+    <tr>
+      <td>${p.name}</td>
+      <td>${p.pos}</td>
+      <td>${p.stars}★</td>
+      <td>${p.homeState}</td>
+      <td>${renderInterestBar(p.interest)}</td>
+      <td>${p.pipelineState || "—"}</td>
+      <td>${renderPitchSummary(p.pitches)}</td>
+    </tr>
+  `;
+}
+
+function renderInterestBar(value = 0) {
+  const pct = Math.round(value * 100);
+  return `
+    <div class="interest-bar">
+      <div class="interest-bar__fill" style="width:${pct}%"></div>
+      <span class="interest-bar__label">${pct}%</span>
+    </div>
+  `;
+}
+
+function renderPitchSummary(pitches = []) {
+  if (!pitches.length) return "—";
+  return pitches.map(p => p.tag).join(", ");
+}
+
+
+// src/ui/views/nilView.js
+
+export function renderNil(state) {
+  return `
+    <div class="view-nil">
+      <h2>NIL / Roo 816</h2>
+      <p>NIL placeholder</p>
+    </div>
+  `;
+}
+
+// src/ui/views/rivalriesView.js
+
+export function renderRivalries(state) {
+  return `
+    <div class="view-rivalries">
+      <h2>Rivalries</h2>
+      <p>Rivalries placeholder</p>
+    </div>
+  `;
+}
+
+// src/ui/views/staffView.js
+
+export function renderStaff(state) {
+  return `
+    <div class="view-staff">
+      <h2>Staff</h2>
+      <p>Staff placeholder</p>
+    </div>
+  `;
+}
+
+// src/ui/views/broadcastView.js
+
+export function renderBroadcast(state) {
+  return `
+    <div class="view-broadcast">
+      <h2>Broadcast</h2>
+      <p>Broadcast placeholder</p>
+    </div>
+  `;
+}
+
+
+src/ui/components/card.js
+src/ui/components/badge.js
+src/ui/components/progress.js
+src/ui/components/table.js
+src/ui/components/grid.js
+src/ui/components/buttons.js
+src/ui/components/ticker.js
+src/ui/components/typography.js
+
+src/app/index.js
+// src/app/index.js
+
+import { initState } from "./stateInit.js";
+import { loadState } from "./stateLoad.js";
+import { mergeState } from "./stateMerge.js";
+import { saveState } from "./stateSave.js";
+import { startAutosave } from "./autosave.js";
+
+import { renderHeader } from "./header.js";
+import { renderNav } from "./nav.js";
+import { renderCurrentView } from "./router.js";
+
+import config from "../data/config.json";
+
+/**
+ * Boot the UMKC Dynasty v8.0 application.
+ * Loads state, merges canon, initializes UI, and starts autosave.
+ */
+export function boot() {
+  // Load saved state (if any)
+  const saved = loadState(config.saveKey);
+
+  // Merge saved state with fresh canon defaults
+  const state = mergeState(saved);
+
+  // Initial save to ensure structure is correct
+  saveState(config.saveKey, state);
+
+  // Render UI shell
+  renderHeader(state);
+  renderNav(state);
+
+  // Render initial view
+  renderCurrentView(state);
+
+  // Start autosave loop
+  startAutosave(config.saveKey, state);
+
+  console.log(`[UMKC Dynasty v${state.version}] Boot complete. Phase: ${state.currentPhase}`);
+}
+
+// Auto‑boot when DOM is ready
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", boot);
+} else {
+  boot();
+}
+
+src/app/bootstrap.js
+// src/app/bootstrap.js
+
+/**
+ * Ensure the root DOM containers exist for the v8.0 SPA.
+ * Creates #app-header, #app-nav, and #app-view if missing.
+ */
+export function bootstrapDOM() {
+  // Root app container
+  let root = document.getElementById("app-root");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "app-root";
+    document.body.appendChild(root);
+  }
+
+  // Header container
+  let header = document.getElementById("app-header");
+  if (!header) {
+    header = document.createElement("div");
+    header.id = "app-header";
+    root.appendChild(header);
+  }
+
+  // Navigation container
+  let nav = document.getElementById("app-nav");
+  if (!nav) {
+    nav = document.createElement("div");
+    nav.id = "app-nav";
+    root.appendChild(nav);
+  }
+
+  // Main view container
+  let view = document.getElementById("app-view");
+  if (!view) {
+    view = document.createElement("div");
+    view.id = "app-view";
+    root.appendChild(view);
+  }
+}
+
+
+/src/data/players.json
+[
+  {
+    "id": "player_001",
+    "name": "First Last",
+    "preferredName": "Nickname",
+    "pos": "QB",
+    "year": "FR",
+    "stars": 2,
+    "overall": 68,
+    "height": "6'1\"",
+    "weight": 195,
+    "hometown": "City",
+    "state": "ST",
+    "injuryStatus": "healthy",
+    "injuryWeeksRemaining": 0,
+    "depthRank": 1,
+    "personalityTrait": "none",
+    "campGrade": null
+  }
+]
+
+/src/data/staff.json
+[
+  {
+    "id": "staff_001",
+    "name": "Coach Name",
+    "role": "Head Coach",
+    "department": "Football",
+    "salary": 120000,
+    "experience": 5,
+    "specialty": "Offense"
+  }
+]
+
+/src/data/schedule2024.json
+[
+  {
+    "id": "game_001",
+    "week": 1,
+    "opponent": "Opponent Name",
+    "date": "2024-09-01",
+    "location": "HOME",
+    "city": "Kansas City",
+    "state": "MO",
+    "broadcast": "ESPN+",
+    "televised": true,
+    "isRivalry": false,
+    "isRivalryName": null,
+    "result": null,
+    "score": { "umkc": 0, "opp": 0 },
+    "phase": "REGULAR_SEASON"
+  }
+]
+
+/src/data/nilDeals.json
+[
+  {
+    "id": "nil_001",
+    "playerName": "Player Name",
+    "sponsor": "Sponsor Name",
+    "tier": "bronze",
+    "dealType": "appearance",
+    "annualValue": 5000,
+    "expiresDate": "2025-06",
+    "status": "active",
+    "performanceBonus": {
+      "trigger": "TD Pass",
+      "bonus": 500
+    }
+  }
+]
+
+/src/data/donors.json
+[
+  {
+    "id": "donor_001",
+    "name": "Donor Name",
+    "tier": "gold",
+    "annualGift": 25000,
+    "preferredArea": "Facilities",
+    "loyaltyScore": 80,
+    "isCorporate": false
+  }
+]
+
+/src/data/stadium.json
+{
+  "name": "Durwood Stadium",
+  "capacity": 3500,
+  "amenities": {
+    "lockerRoom": { "rating": 3, "maxRating": 5, "upgraded": false },
+    "weightRoom": { "rating": 4, "maxRating": 5, "upgraded": true },
+    "turfQuality": { "rating": 5, "maxRating": 5, "upgraded": true },
+    "fanExperience": { "rating": 2, "maxRating": 5, "upgraded": false },
+    "mediaFacilities": { "rating": 3, "maxRating": 5, "upgraded": false },
+    "recruitingLounge": { "rating": 4, "maxRating": 5, "upgraded": true }
+  },
+  "sections": [
+    {
+      "name": "North Bleachers",
+      "capacity": 1200,
+      "fillRate": 0.65,
+      "loudnessMultiplier": 1.1
+    }
+  ]
+}
+
+/src/data/traditions.json
+[
+  {
+    "id": "trad_001",
+    "name": "Tradition Name",
+    "category": "pregame",
+    "status": "active",
+    "description": "A tradition description.",
+    "moralBonus": 2,
+    "communityBonus": 1,
+    "recruitingBonus": 0,
+    "homeFieldBonus": 1,
+    "broadcastNote": "A broadcast note about this tradition."
+  }
+]
+
+/src/data/rivalries.json
+[
+  {
+    "id": "riv_001",
+    "name": "Rivalry Name",
+    "opponent": "Opponent Name",
+    "inauguralYear": 2024,
+    "trophyName": "Trophy Name",
+    "trophyDesc": "Description of the rivalry trophy.",
+    "seriesRecord": { "w": 0, "l": 0 },
+    "heatLevel": 20,
+    "broadcastNote": "A rivalry broadcast note."
+  }
+]
+
+/src/data/recruitingBoard.json
+[
+  {
+    "id": "rec_001",
+    "name": "Prospect Name",
+    "pos": "WR",
+    "stars": 3,
+    "interest": 40,
+    "homeState": "MO",
+    "priority": "medium"
+  }
+]
+
+/src/data/config.json
+{
+  "version": "8.0.0",
+  "saveKey": "umkc_dynasty_v8",
+  "initialYear": 2024
+}
